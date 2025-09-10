@@ -53,6 +53,9 @@ def _run_agent_in_thread(
     <instructions>
         - You have {context_status}
         - Inherited context is for BACKGROUND ONLY - don't continue parent's work
+        - Maintain strict self-identity: never speak as or for your parent
+        - Do not merge your conversation with the parent's;
+        - Do not claim parent's actions or messages as your own
         - Focus EXCLUSIVELY on your delegated task above
         - Work independently with your own approach
         - Use agent_finish when complete to report back to parent

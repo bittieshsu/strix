@@ -25,7 +25,7 @@
         Use is_input=true for regular text input to running processes.</description>
       </parameter>
       <parameter name="timeout" type="number" required="false">
-        <description>Optional timeout in seconds for command execution. If not provided, uses default timeout behavior. Set to higher values for long-running commands like installations or tests. Default is 10 seconds.</description>
+        <description>Optional timeout in seconds for command execution. CAPPED AT 60 SECONDS. If not provided, uses default wait (30s). On timeout, the command keeps running and the tool returns with status 'running'. For truly long-running tasks, prefer backgrounding with '&'.</description>
       </parameter>
       <parameter name="terminal_id" type="string" required="false">
         <description>Identifier for the terminal session. Defaults to "default". Use different IDs to manage multiple concurrent terminal sessions.</description>
@@ -63,14 +63,15 @@
   3. LONG-RUNNING COMMANDS:
      - Commands never get killed automatically - they keep running in background
      - Set timeout to control how long to wait for output before returning
+     - For daemons/servers or very long jobs, append '&' to run in background
      - Use empty command "" to check progress (waits for timeout period to collect output)
      - Use C-c, C-d, C-z to interrupt processes (works automatically, no is_input needed)
 
   4. TIMEOUT HANDLING:
-     - Timeout controls how long to wait before returning current output
+     - Timeout controls how long to wait before returning current output (max 60s cap)
      - Commands are NEVER killed on timeout - they keep running
      - After timeout, you can run new commands or check progress with empty command
-     - All commands return status "completed" - you have full control
+     - On timeout, status is 'running'; on completion, status is 'completed'
 
   5. MULTIPLE TERMINALS: Use different terminal_id values to run multiple concurrent sessions.
 
@@ -97,7 +98,7 @@
   # Run a command with custom timeout
   <function=terminal_execute>
   <parameter=command>npm install</parameter>
-  <parameter=timeout>120</parameter>
+  <parameter=timeout>60</parameter>
   </function>
 
   # Check progress of running command (waits for timeout to collect output)
