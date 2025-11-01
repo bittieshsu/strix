@@ -134,8 +134,16 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         console.print()
         with console.status("[bold cyan]Running penetration test...", spinner="dots") as status:
             agent = StrixAgent(agent_config)
-            await agent.execute_scan(scan_config)
+            result = await agent.execute_scan(scan_config)
             status.stop()
+
+            if isinstance(result, dict) and not result.get("success", True):
+                error_msg = result.get("error", "Unknown error")
+                console.print()
+                console.print(f"[bold red]❌ Penetration test failed:[/] {error_msg}")
+                console.print()
+                sys.exit(1)
+
     except Exception as e:
         console.print(f"[bold red]Error during penetration test:[/] {e}")
         raise

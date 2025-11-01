@@ -221,6 +221,22 @@ class BaseAgent(metaclass=AgentMeta):
                 error_msg = str(e)
                 error_details = getattr(e, "details", None)
                 self.state.add_error(error_msg)
+
+                if self.non_interactive:
+                    self.state.set_completed({"success": False, "error": error_msg})
+                    if tracer:
+                        tracer.update_agent_status(self.state.agent_id, "failed", error_msg)
+                        if error_details:
+                            tracer.log_tool_execution_start(
+                                self.state.agent_id,
+                                "llm_error_details",
+                                {"error": error_msg, "details": error_details},
+                            )
+                            tracer.update_tool_execution(
+                                tracer._next_execution_id - 1, "failed", error_details
+                            )
+                    return {"success": False, "error": error_msg}
+
                 self.state.enter_waiting_state(llm_failed=True)
                 if tracer:
                     tracer.update_agent_status(self.state.agent_id, "llm_failed", error_msg)
