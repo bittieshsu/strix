@@ -329,14 +329,25 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     console = Console()
     tracer = get_global_tracer()
 
+    scan_completed = False
+    if tracer and tracer.scan_results:
+        scan_completed = tracer.scan_results.get("scan_completed", False)
+
+    has_vulnerabilities = tracer and len(tracer.vulnerability_reports) > 0
+
     completion_text = Text()
-    completion_text.append("🦉 ", style="bold white")
-    completion_text.append("AGENT FINISHED", style="bold green")
-    completion_text.append(" • ", style="dim white")
-    completion_text.append("Penetration test completed", style="white")
+    if scan_completed:
+        completion_text.append("🦉 ", style="bold white")
+        completion_text.append("AGENT FINISHED", style="bold green")
+        completion_text.append(" • ", style="dim white")
+        completion_text.append("Penetration test completed", style="white")
+    else:
+        completion_text.append("🦉 ", style="bold white")
+        completion_text.append("SESSION ENDED", style="bold yellow")
+        completion_text.append(" • ", style="dim white")
+        completion_text.append("Penetration test interrupted by user", style="white")
 
     stats_text = build_stats_text(tracer)
-
     llm_stats_text = build_llm_stats_text(tracer)
 
     target_text = Text()
@@ -352,39 +363,29 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
             if i < len(args.targets_info) - 1:
                 target_text.append("\n")
 
-    results_text = Text()
-    results_text.append("📊 Results Saved To: ", style="bold cyan")
-    results_text.append(str(results_path), style="bold yellow")
+    panel_parts = [completion_text, "\n\n", target_text]
 
     if stats_text.plain:
-        if llm_stats_text.plain:
-            panel_content = Text.assemble(
-                completion_text,
-                "\n\n",
-                target_text,
-                "\n",
-                stats_text,
-                "\n",
-                llm_stats_text,
-                "\n\n",
-                results_text,
-            )
-        else:
-            panel_content = Text.assemble(
-                completion_text, "\n\n", target_text, "\n", stats_text, "\n\n", results_text
-            )
-    elif llm_stats_text.plain:
-        panel_content = Text.assemble(
-            completion_text, "\n\n", target_text, "\n", llm_stats_text, "\n\n", results_text
-        )
-    else:
-        panel_content = Text.assemble(completion_text, "\n\n", target_text, "\n\n", results_text)
+        panel_parts.extend(["\n", stats_text])
+
+    if llm_stats_text.plain:
+        panel_parts.extend(["\n", llm_stats_text])
+
+    if scan_completed or has_vulnerabilities:
+        results_text = Text()
+        results_text.append("📊 Results Saved To: ", style="bold cyan")
+        results_text.append(str(results_path), style="bold yellow")
+        panel_parts.extend(["\n\n", results_text])
+
+    panel_content = Text.assemble(*panel_parts)
+
+    border_style = "green" if scan_completed else "yellow"
 
     panel = Panel(
         panel_content,
         title="[bold green]🛡️  STRIX CYBERSECURITY AGENT",
         title_align="center",
-        border_style="green",
+        border_style=border_style,
         padding=(1, 2),
     )
 
