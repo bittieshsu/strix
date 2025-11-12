@@ -24,8 +24,6 @@ Strix
 <a href="https://trendshift.io/repositories/15362" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15362" alt="usestrix%2Fstrix | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </div>
 
-:star: _Love Strix? Give us a star to help other developers discover it!_
-
 <br />
 
 <div align="center">
@@ -34,9 +32,6 @@ Strix
 
 > [!TIP]
 > **New!** Strix now integrates seamlessly with GitHub Actions and CI/CD pipelines. Automatically scan for vulnerabilities on every pull request and block insecure code before it reaches production!
-
-> [!WARNING]
-> Only test systems you own or have permission to test. You are responsible for using Strix ethically and legally.
 
 ---
 
@@ -101,13 +96,13 @@ Our managed platform provides:
 
 ### 🛠️ Agentic Security Tools
 
-- **🔌 Full HTTP Proxy** - Full request/response manipulation and analysis
-- **🌐 Browser Automation** - Multi-tab browser for testing of XSS, CSRF, auth flows
-- **💻 Terminal Environments** - Interactive shells for command execution and testing
-- **🐍 Python Runtime** - Custom exploit development and validation
-- **🔍 Reconnaissance** - Automated OSINT and attack surface mapping
-- **📁 Code Analysis** - Static and dynamic analysis capabilities
-- **📝 Knowledge Management** - Structured findings and attack documentation
+- **Full HTTP Proxy** - Full request/response manipulation and analysis
+- **Browser Automation** - Multi-tab browser for testing of XSS, CSRF, auth flows
+- **Terminal Environments** - Interactive shells for command execution and testing
+- **Python Runtime** - Custom exploit development and validation
+- **Reconnaissance** - Automated OSINT and attack surface mapping
+- **Code Analysis** - Static and dynamic analysis capabilities
+- **Knowledge Management** - Structured findings and attack documentation
 
 ### 🎯 Comprehensive Vulnerability Detection
 
@@ -206,7 +201,6 @@ See our [Contributing Guide](CONTRIBUTING.md) for details on:
 - Setting up your development environment
 - Running tests and quality checks
 - Submitting pull requests
-- Code style guidelines
 
 ### Prompt Modules Collection
 Help expand our collection of specialized prompt modules for AI agents:
@@ -221,5 +215,8 @@ Have questions? Found a bug? Want to contribute? **[Join our Discord!](https://d
 ## 🌟 Support the Project
 
 **Love Strix?** Give us a ⭐ on GitHub!
+
+> [!WARNING]
+> Only test apps you own or have permission to test. You are responsible for using Strix ethically and legally.
 
 </div>
