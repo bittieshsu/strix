@@ -123,7 +123,7 @@ class AgentState(BaseModel):
             return False
 
         elapsed = (datetime.now(UTC) - self.waiting_start_time).total_seconds()
-        return elapsed > 120
+        return elapsed > 600
 
     def has_empty_last_messages(self, count: int = 3) -> bool:
         if len(self.messages) < count:
