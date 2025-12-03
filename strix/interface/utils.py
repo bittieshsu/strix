@@ -129,7 +129,7 @@ def build_final_stats_text(tracer: Any) -> Text:
     return stats_text
 
 
-def build_live_stats_text(tracer: Any) -> Text:
+def build_live_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None) -> Text:
     stats_text = Text()
     if not tracer:
         return stats_text
@@ -163,6 +163,12 @@ def build_live_stats_text(tracer: Any) -> Text:
             if i < len(severity_parts) - 1:
                 stats_text.append(" | ", style="dim white")
 
+        stats_text.append("\n")
+
+    if agent_config:
+        llm_config = agent_config["llm_config"]
+        model = getattr(llm_config, "model_name", "Unknown")
+        stats_text.append(f"🧠 Model: {model}")
         stats_text.append("\n")
 
     stats_text.append("🤖 Agents: ", style="bold white")
