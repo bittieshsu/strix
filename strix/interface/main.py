@@ -57,10 +57,7 @@ def validate_environment() -> None:  # noqa: PLR0912, PLR0915
     )
 
     if not os.getenv("LLM_API_KEY"):
-        if not has_base_url:
-            missing_required_vars.append("LLM_API_KEY")
-        else:
-            missing_optional_vars.append("LLM_API_KEY")
+        missing_optional_vars.append("LLM_API_KEY")
 
     if not has_base_url:
         missing_optional_vars.append("LLM_API_BASE")
@@ -93,13 +90,6 @@ def validate_environment() -> None:  # noqa: PLR0912, PLR0915
                     " - Model name to use with litellm (e.g., 'openai/gpt-5')\n",
                     style="white",
                 )
-            elif var == "LLM_API_KEY":
-                error_text.append("• ", style="white")
-                error_text.append("LLM_API_KEY", style="bold cyan")
-                error_text.append(
-                    " - API key for the LLM provider (required for cloud providers)\n",
-                    style="white",
-                )
 
         if missing_optional_vars:
             error_text.append("\nOptional environment variables:\n", style="white")
@@ -107,7 +97,10 @@ def validate_environment() -> None:  # noqa: PLR0912, PLR0915
                 if var == "LLM_API_KEY":
                     error_text.append("• ", style="white")
                     error_text.append("LLM_API_KEY", style="bold cyan")
-                    error_text.append(" - API key for the LLM provider\n", style="white")
+                    error_text.append(
+                        " - API key for the LLM provider (not needed for local models, Vertex AI, AWS, etc.)\n",
+                        style="white",
+                    )
                 elif var == "LLM_API_BASE":
                     error_text.append("• ", style="white")
                     error_text.append("LLM_API_BASE", style="bold cyan")
@@ -126,14 +119,11 @@ def validate_environment() -> None:  # noqa: PLR0912, PLR0915
         error_text.append("\nExample setup:\n", style="white")
         error_text.append("export STRIX_LLM='openai/gpt-5'\n", style="dim white")
 
-        if "LLM_API_KEY" in missing_required_vars:
-            error_text.append("export LLM_API_KEY='your-api-key-here'\n", style="dim white")
-
         if missing_optional_vars:
             for var in missing_optional_vars:
                 if var == "LLM_API_KEY":
                     error_text.append(
-                        "export LLM_API_KEY='your-api-key-here'  # optional with local models\n",
+                        "export LLM_API_KEY='your-api-key-here'  # not needed for local models, Vertex AI, AWS, etc.\n",
                         style="dim white",
                     )
                 elif var == "LLM_API_BASE":
