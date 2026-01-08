@@ -1,4 +1,5 @@
 import logging
+import warnings
 
 import litellm
 
@@ -15,3 +16,4 @@ __all__ = [
 litellm._logging._disable_debugging()
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 logging.getLogger("asyncio").propagate = False
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="asyncio")
