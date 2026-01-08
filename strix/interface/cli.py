@@ -14,7 +14,11 @@ from strix.agents.StrixAgent import StrixAgent
 from strix.llm.config import LLMConfig
 from strix.telemetry.tracer import Tracer, set_global_tracer
 
-from .utils import build_final_stats_text, build_live_stats_text, get_severity_color
+from .utils import (
+    build_final_stats_text,
+    build_live_stats_text,
+    format_vulnerability_report,
+)
 
 
 async def run_cli(args: Any) -> None:  # noqa: PLR0915
@@ -88,28 +92,14 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     tracer = Tracer(args.run_name)
     tracer.set_scan_config(scan_config)
 
-    def display_vulnerability(report_id: str, title: str, content: str, severity: str) -> None:
-        severity_color = get_severity_color(severity.lower())
+    def display_vulnerability(report: dict[str, Any]) -> None:
+        report_id = report.get("id", "unknown")
 
-        vuln_text = Text()
-        vuln_text.append("🐞 ", style="bold red")
-        vuln_text.append("VULNERABILITY FOUND", style="bold red")
-        vuln_text.append(" • ", style="dim white")
-        vuln_text.append(title, style="bold white")
-
-        severity_text = Text()
-        severity_text.append("Severity: ", style="dim white")
-        severity_text.append(severity.upper(), style=f"bold {severity_color}")
+        vuln_text = format_vulnerability_report(report)
 
         vuln_panel = Panel(
-            Text.assemble(
-                vuln_text,
-                "\n\n",
-                severity_text,
-                "\n\n",
-                content,
-            ),
-            title=f"[bold red]🔍 {report_id.upper()}",
+            vuln_text,
+            title=f"[bold red]{report_id.upper()}",
             title_align="left",
             border_style="red",
             padding=(1, 2),

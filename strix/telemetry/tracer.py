@@ -54,7 +54,7 @@ class Tracer:
         self._next_message_id = 1
         self._saved_vuln_ids: set[str] = set()
 
-        self.vulnerability_found_callback: Callable[[str, str, str, str], None] | None = None
+        self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
 
     def set_run_name(self, run_name: str) -> None:
         self.run_name = run_name
@@ -138,9 +138,7 @@ class Tracer:
         logger.info(f"Added vulnerability report: {report_id} - {title}")
 
         if self.vulnerability_found_callback:
-            self.vulnerability_found_callback(
-                report_id, title.strip(), description or "", severity.lower().strip()
-            )
+            self.vulnerability_found_callback(report)
 
         self.save_run_data()
         return report_id
