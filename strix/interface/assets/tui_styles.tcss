@@ -307,9 +307,8 @@ VulnerabilityDetailScreen {
 }
 
 .tool-call {
-    margin: 0 !important;
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
+    margin-top: 1;
+    margin-bottom: 0;
     padding: 0 1;
     background: transparent;
     border: none;
@@ -318,24 +317,21 @@ VulnerabilityDetailScreen {
 
 .tool-call.status-completed {
     background: transparent;
-    margin: 0 !important;
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
+    margin-top: 1;
+    margin-bottom: 0;
 }
 
 .tool-call.status-running {
     background: transparent;
-    margin: 0 !important;
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
+    margin-top: 1;
+    margin-bottom: 0;
 }
 
 .tool-call.status-failed,
 .tool-call.status-error {
     background: transparent;
-    margin: 0 !important;
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
+    margin-top: 1;
+    margin-bottom: 0;
 }
 
 .browser-tool,
@@ -349,17 +345,15 @@ VulnerabilityDetailScreen {
 .web-search-tool,
 .scan-info-tool,
 .subagent-info-tool {
-    margin: 0 !important;
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
+    margin-top: 1;
+    margin-bottom: 0;
     background: transparent;
 }
 
 .finish-tool,
 .reporting-tool {
-    margin: 0 !important;
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
+    margin-top: 1;
+    margin-bottom: 0;
     background: transparent;
 }
 
@@ -386,9 +380,8 @@ VulnerabilityDetailScreen {
 .subagent-info-tool.status-completed,
 .subagent-info-tool.status-running {
     background: transparent;
-    margin: 0 !important;
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
+    margin-top: 1;
+    margin-bottom: 0;
 }
 
 .finish-tool.status-completed,
@@ -396,9 +389,8 @@ VulnerabilityDetailScreen {
 .reporting-tool.status-completed,
 .reporting-tool.status-running {
     background: transparent;
-    margin: 0 !important;
-    margin-top: 0 !important;
-    margin-bottom: 0 !important;
+    margin-top: 1;
+    margin-bottom: 0;
 }
 
 Tree {

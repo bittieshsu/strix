@@ -1021,7 +1021,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
             if content:
                 if renderables:
-                    renderables.append(Text("\n"))
+                    renderables.append(Text(""))
                 renderables.append(content)
 
         if self.selected_agent_id:
@@ -1030,7 +1030,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 streaming_text = self._render_streaming_content(streaming)
                 if streaming_text:
                     if renderables:
-                        renderables.append(Text("\n"))
+                        renderables.append(Text(""))
                     renderables.append(streaming_text)
 
         if not renderables:
@@ -1055,7 +1055,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
                 text_content = AgentMessageRenderer.render_simple(segment.content)
                 if renderables:
-                    renderables.append(Text("\n"))
+                    renderables.append(Text(""))
                 renderables.append(text_content)
 
             elif segment.type == "tool":
@@ -1065,7 +1065,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                     segment.is_complete,
                 )
                 if renderables:
-                    renderables.append(Text("\n"))
+                    renderables.append(Text(""))
                 renderables.append(tool_renderable)
 
         if not renderables:
