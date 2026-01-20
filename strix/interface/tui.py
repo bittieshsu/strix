@@ -1228,6 +1228,9 @@ class StrixTUIApp(App):  # type: ignore[misc]
         if stats_text:
             stats_content.append(stats_text)
 
+        version = get_package_version()
+        stats_content.append(f"\n  v{version}", style="white")
+
         from rich.panel import Panel
 
         stats_panel = Panel(
