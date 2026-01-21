@@ -45,6 +45,9 @@ class Config:
     # Telemetry
     strix_telemetry = "1"
 
+    # Config file override (set via --config CLI arg)
+    _config_file_override: Path | None = None
+
     @classmethod
     def _tracked_names(cls) -> list[str]:
         return [
@@ -83,6 +86,8 @@ class Config:
 
     @classmethod
     def config_file(cls) -> Path:
+        if cls._config_file_override is not None:
+            return cls._config_file_override
         return cls.config_dir() / "cli-config.json"
 
     @classmethod
@@ -101,7 +106,7 @@ class Config:
     def save(cls, config: dict[str, Any]) -> bool:
         try:
             cls.config_dir().mkdir(parents=True, exist_ok=True)
-            config_path = cls.config_file()
+            config_path = cls.config_dir() / "cli-config.json"
             with config_path.open("w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
         except OSError:
@@ -111,7 +116,7 @@ class Config:
         return True
 
     @classmethod
-    def apply_saved(cls) -> dict[str, str]:
+    def apply_saved(cls, force: bool = False) -> dict[str, str]:
         saved = cls.load()
         env_vars = saved.get("env", {})
         if not isinstance(env_vars, dict):
@@ -124,15 +129,17 @@ class Config:
         if cleared_vars:
             for var_name in cleared_vars:
                 env_vars.pop(var_name, None)
-            cls.save({"env": env_vars})
+            if cls._config_file_override is None:
+                cls.save({"env": env_vars})
         if cls._llm_env_changed(env_vars):
             for var_name in cls._llm_env_vars():
                 env_vars.pop(var_name, None)
-            cls.save({"env": env_vars})
+            if cls._config_file_override is None:
+                cls.save({"env": env_vars})
         applied = {}
 
         for var_name, var_value in env_vars.items():
-            if var_name in cls.tracked_vars() and var_name not in os.environ:
+            if var_name in cls.tracked_vars() and (force or var_name not in os.environ):
                 os.environ[var_name] = var_value
                 applied[var_name] = var_value
 
@@ -163,17 +170,9 @@ class Config:
 
         return cls.save({"env": merged})
 
-    @classmethod
-    def override(cls, key: str, value: str) -> None:
-        """Override a configuration variable dynamically."""
-        if hasattr(cls, key):
-            setattr(cls, key, value)
-        else:
-            os.environ[key] = value
 
-
-def apply_saved_config() -> dict[str, str]:
-    return Config.apply_saved()
+def apply_saved_config(force: bool = False) -> dict[str, str]:
+    return Config.apply_saved(force=force)
 
 
 def save_current_config() -> bool:

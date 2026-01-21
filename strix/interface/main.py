@@ -5,7 +5,6 @@ Strix Agent Interface
 
 import argparse
 import asyncio
-import json
 import logging
 import shutil
 import sys
@@ -36,6 +35,7 @@ from strix.interface.utils import (  # noqa: E402
     infer_target_type,
     process_pull_line,
     rewrite_localhost_targets,
+    validate_config_file,
     validate_llm_response,
 )
 from strix.runtime.docker_runtime import HOST_GATEWAY_HOSTNAME  # noqa: E402
@@ -360,7 +360,7 @@ Examples:
     parser.add_argument(
         "--config",
         type=str,
-        help="Path to the configuration file (.json)",
+        help="Path to a custom config file (JSON) to use instead of ~/.strix/cli-config.json",
     )
 
     args = parser.parse_args()
@@ -507,19 +507,14 @@ def pull_docker_image() -> None:
     console.print()
 
 
-def load_config_file(config_path: str):
-    if config_path.endswith(".json"):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config_data = json.load(f)
-                for key, value in config_data.items():
-                    Config.override(key, str(value))  # Use Config class to override variables
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"Error loading JSON config file: {e}")
-            sys.exit(1)
-    else:
-        print("Unsupported config file format. Use .json.")
-        sys.exit(1)
+def apply_config_override(config_path: str) -> None:
+    Config._config_file_override = validate_config_file(config_path)
+    apply_saved_config(force=True)
+
+
+def persist_config() -> None:
+    if Config._config_file_override is None:
+        save_current_config()
 
 
 def main() -> None:
@@ -529,7 +524,7 @@ def main() -> None:
     args = parse_arguments()
 
     if args.config:
-        load_config_file(args.config)
+        apply_config_override(args.config)
 
     check_docker_installed()
     pull_docker_image()
@@ -537,7 +532,7 @@ def main() -> None:
     validate_environment()
     asyncio.run(warm_up_llm())
 
-    save_current_config()
+    persist_config()
 
     args.run_name = generate_run_name(args.targets_info)
 

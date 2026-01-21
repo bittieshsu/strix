@@ -1,4 +1,5 @@
 import ipaddress
+import json
 import re
 import secrets
 import shutil
@@ -789,3 +790,33 @@ def process_pull_line(
 def validate_llm_response(response: Any) -> None:
     if not response or not response.choices or not response.choices[0].message.content:
         raise RuntimeError("Invalid response from LLM")
+
+
+def validate_config_file(config_path: str) -> Path:
+    console = Console()
+    path = Path(config_path)
+
+    if not path.exists():
+        console.print(f"[bold red]Error:[/] Config file not found: {config_path}")
+        sys.exit(1)
+
+    if path.suffix != ".json":
+        console.print("[bold red]Error:[/] Config file must be a .json file")
+        sys.exit(1)
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        console.print(f"[bold red]Error:[/] Invalid JSON in config file: {e}")
+        sys.exit(1)
+
+    if not isinstance(data, dict):
+        console.print("[bold red]Error:[/] Config file must contain a JSON object")
+        sys.exit(1)
+
+    if "env" not in data or not isinstance(data.get("env"), dict):
+        console.print("[bold red]Error:[/] Config file must have an 'env' object")
+        sys.exit(1)
+
+    return path
