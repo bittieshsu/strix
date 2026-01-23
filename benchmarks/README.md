@@ -2,6 +2,15 @@
 
 We use security benchmarks to track Strix's capabilities and improvements over time. We plan to add more benchmarks, both existing ones and our own, to help the community evaluate and compare security agents.
 
+
+## Full Details
+
+For the complete benchmark results, evaluation scripts, and run data, see the [usestrix/benchmarks](https://github.com/usestrix/benchmarks) repository.
+
+> [!NOTE]
+> We are actively adding more benchmarks to our evaluation suite.
+
+
 ## Results
 
 | Benchmark | Challenges | Success Rate |
@@ -32,10 +41,3 @@ pie title Challenge Outcomes (104 Total)
 **Resource Usage:**
 - Average solve time: ~19 minutes
 - Total cost: ~$337 for 100 challenges
-
-## Full Details
-
-For the complete benchmark results, evaluation scripts, and run data, see the [usestrix/benchmarks](https://github.com/usestrix/benchmarks) repository.
-
-> [!NOTE]
-> We are actively adding more benchmarks to our evaluation suite.
