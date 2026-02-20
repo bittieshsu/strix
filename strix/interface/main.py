@@ -18,6 +18,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.config import Config, apply_saved_config, save_current_config
+from strix.llm.utils import get_litellm_model_name, get_strix_api_base
 
 
 apply_saved_config()
@@ -208,6 +209,7 @@ async def warm_up_llm() -> None:
             or Config.get("openai_api_base")
             or Config.get("litellm_base_url")
             or Config.get("ollama_api_base")
+            or get_strix_api_base(model_name)
         )
 
         test_messages = [
@@ -217,8 +219,9 @@ async def warm_up_llm() -> None:
 
         llm_timeout = int(Config.get("llm_timeout") or "300")
 
+        litellm_model = get_litellm_model_name(model_name) or model_name
         completion_kwargs: dict[str, Any] = {
-            "model": model_name,
+            "model": litellm_model,
             "messages": test_messages,
             "timeout": llm_timeout,
         }

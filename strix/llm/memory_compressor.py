@@ -4,6 +4,7 @@ from typing import Any
 import litellm
 
 from strix.config import Config
+from strix.llm.utils import get_litellm_model_name, get_strix_api_base
 
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,8 @@ keeping the summary concise and to the point."""
 
 def _count_tokens(text: str, model: str) -> int:
     try:
-        count = litellm.token_counter(model=model, text=text)
+        litellm_model = get_litellm_model_name(model) or model
+        count = litellm.token_counter(model=litellm_model, text=text)
         return int(count)
     except Exception:
         logger.exception("Failed to count tokens")
@@ -110,11 +112,13 @@ def _summarize_messages(
         or Config.get("openai_api_base")
         or Config.get("litellm_base_url")
         or Config.get("ollama_api_base")
+        or get_strix_api_base(model)
     )
 
     try:
+        litellm_model = get_litellm_model_name(model) or model
         completion_args: dict[str, Any] = {
-            "model": model,
+            "model": litellm_model,
             "messages": [{"role": "user", "content": prompt}],
             "timeout": timeout,
         }

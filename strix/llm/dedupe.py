@@ -6,6 +6,7 @@ from typing import Any
 import litellm
 
 from strix.config import Config
+from strix.llm.utils import get_litellm_model_name, get_strix_api_base
 
 
 logger = logging.getLogger(__name__)
@@ -162,6 +163,7 @@ def check_duplicate(
             or Config.get("openai_api_base")
             or Config.get("litellm_base_url")
             or Config.get("ollama_api_base")
+            or get_strix_api_base(model_name)
         )
 
         messages = [
@@ -176,8 +178,9 @@ def check_duplicate(
             },
         ]
 
+        litellm_model = get_litellm_model_name(model_name) or model_name
         completion_kwargs: dict[str, Any] = {
-            "model": model_name,
+            "model": litellm_model,
             "messages": messages,
             "timeout": 120,
         }
