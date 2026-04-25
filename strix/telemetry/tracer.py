@@ -6,8 +6,6 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from strix.telemetry import posthog
-from strix.telemetry.flags import is_telemetry_enabled
-from strix.telemetry.utils import TelemetrySanitizer, append_jsonl_record
 
 
 logger = logging.getLogger(__name__)
@@ -25,6 +23,16 @@ def set_global_tracer(tracer: "Tracer") -> None:
 
 
 class Tracer:
+    """Per-scan in-memory state the TUI renders + per-scan artifact writer.
+
+    Holds live state the TUI reads (chat messages, agent tree, tool
+    executions, vulnerability reports, LLM usage). Writes vulnerability
+    markdown + CSV + final pentest report to ``strix_runs/<scan>/``.
+
+    Conversation history goes to the SDK's ``SQLiteSession`` instead;
+    SDK trace events are not persisted here.
+    """
+
     def __init__(self, run_name: str | None = None):
         self.run_name = run_name
         self.run_id = run_name or f"run-{uuid4().hex[:8]}"
@@ -58,86 +66,11 @@ class Tracer:
             "status": "running",
         }
         self._run_dir: Path | None = None
-        self._events_file_path: Path | None = None
-        self._next_execution_id = 1
         self._next_message_id = 1
         self._saved_vuln_ids: set[str] = set()
-        self._run_completed_emitted = False
-        self._telemetry_enabled = is_telemetry_enabled()
-        self._sanitizer = TelemetrySanitizer()
 
         self.caido_url: str | None = None
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
-
-        self._emit_run_started_event()
-
-    @property
-    def events_file_path(self) -> Path:
-        if self._events_file_path is None:
-            self._events_file_path = self.get_run_dir() / "events.jsonl"
-        return self._events_file_path
-
-    def _sanitize_data(self, data: Any, key_hint: str | None = None) -> Any:
-        return self._sanitizer.sanitize(data, key_hint=key_hint)
-
-    def _append_event_record(self, record: dict[str, Any]) -> None:
-        try:
-            append_jsonl_record(self.events_file_path, record)
-        except OSError:
-            logger.exception("Failed to append JSONL event record")
-
-    def _enrich_actor(self, actor: dict[str, Any] | None) -> dict[str, Any] | None:
-        if not actor:
-            return None
-
-        enriched = dict(actor)
-        if "agent_name" in enriched:
-            return enriched
-
-        agent_id = enriched.get("agent_id")
-        if not isinstance(agent_id, str):
-            return enriched
-
-        agent_data = self.agents.get(agent_id, {})
-        agent_name = agent_data.get("name")
-        if isinstance(agent_name, str) and agent_name:
-            enriched["agent_name"] = agent_name
-
-        return enriched
-
-    def _emit_event(
-        self,
-        event_type: str,
-        actor: dict[str, Any] | None = None,
-        payload: Any | None = None,
-        status: str | None = None,
-        error: Any | None = None,
-        source: str = "strix.tracer",
-        include_run_metadata: bool = False,
-    ) -> None:
-        if not self._telemetry_enabled:
-            return
-
-        enriched_actor = self._enrich_actor(actor)
-        sanitized_actor = self._sanitize_data(enriched_actor) if enriched_actor else None
-        sanitized_payload = self._sanitize_data(payload) if payload is not None else None
-        sanitized_error = self._sanitize_data(error) if error is not None else None
-
-        record = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "event_type": event_type,
-            "run_id": self.run_id,
-            "trace_id": uuid4().hex,
-            "span_id": uuid4().hex[:16],
-            "actor": sanitized_actor,
-            "payload": sanitized_payload,
-            "status": status,
-            "error": sanitized_error,
-            "source": source,
-        }
-        if include_run_metadata:
-            record["run_metadata"] = self._sanitize_data(self.run_metadata)
-        self._append_event_record(record)
 
     def set_run_name(self, run_name: str) -> None:
         self.run_name = run_name
@@ -145,24 +78,6 @@ class Tracer:
         self.run_metadata["run_name"] = run_name
         self.run_metadata["run_id"] = run_name
         self._run_dir = None
-        self._events_file_path = None
-        self._run_completed_emitted = False
-        self._emit_run_started_event()
-
-    def _emit_run_started_event(self) -> None:
-        if not self._telemetry_enabled:
-            return
-
-        self._emit_event(
-            "run.started",
-            payload={
-                "run_name": self.run_name,
-                "start_time": self.start_time,
-                "local_jsonl_path": str(self.events_file_path),
-            },
-            status="running",
-            include_run_metadata=True,
-        )
 
     def get_run_dir(self) -> Path:
         if self._run_dir is None:
@@ -235,12 +150,6 @@ class Tracer:
         self.vulnerability_reports.append(report)
         logger.info(f"Added vulnerability report: {report_id} - {title}")
         posthog.finding(severity)
-        self._emit_event(
-            "finding.created",
-            payload={"report": report},
-            status=report["severity"],
-            source="strix.findings",
-        )
 
         if self.vulnerability_found_callback:
             self.vulnerability_found_callback(report)
@@ -285,15 +194,6 @@ class Tracer:
 """
 
         logger.info("Updated scan final fields")
-        self._emit_event(
-            "finding.reviewed",
-            payload={
-                "scan_completed": True,
-                "vulnerability_count": len(self.vulnerability_reports),
-            },
-            status="completed",
-            source="strix.findings",
-        )
         self.save_run_data(mark_complete=True)
         posthog.end(self, exit_reason="finished_by_tool")
 
@@ -307,22 +207,15 @@ class Tracer:
         message_id = self._next_message_id
         self._next_message_id += 1
 
-        message_data = {
-            "message_id": message_id,
-            "content": content,
-            "role": role,
-            "agent_id": agent_id,
-            "timestamp": datetime.now(UTC).isoformat(),
-            "metadata": metadata or {},
-        }
-
-        self.chat_messages.append(message_data)
-        self._emit_event(
-            "chat.message",
-            actor={"agent_id": agent_id, "role": role},
-            payload={"message_id": message_id, "content": content, "metadata": metadata or {}},
-            status="logged",
-            source="strix.chat",
+        self.chat_messages.append(
+            {
+                "message_id": message_id,
+                "content": content,
+                "role": role,
+                "agent_id": agent_id,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "metadata": metadata or {},
+            }
         )
         return message_id
 
@@ -334,12 +227,6 @@ class Tracer:
                 "user_instructions": config.get("user_instructions", ""),
                 "max_iterations": config.get("max_iterations", 200),
             }
-        )
-        self._emit_event(
-            "run.configured",
-            payload={"scan_config": config},
-            status="configured",
-            source="strix.run",
         )
 
     def save_run_data(self, mark_complete: bool = False) -> None:
@@ -489,31 +376,9 @@ class Tracer:
                 logger.info("Updated vulnerability index: %s", vuln_csv_file)
 
             logger.info("📊 Essential scan data saved to: %s", run_dir)
-            if mark_complete and not self._run_completed_emitted:
-                self._emit_event(
-                    "run.completed",
-                    payload={
-                        "duration_seconds": self._calculate_duration(),
-                        "vulnerability_count": len(self.vulnerability_reports),
-                    },
-                    status="completed",
-                    source="strix.run",
-                    include_run_metadata=True,
-                )
-                self._run_completed_emitted = True
 
         except (OSError, RuntimeError):
             logger.exception("Failed to save scan data")
-
-    def _calculate_duration(self) -> float:
-        try:
-            start = datetime.fromisoformat(self.start_time.replace("Z", "+00:00"))
-            if self.end_time:
-                end = datetime.fromisoformat(self.end_time.replace("Z", "+00:00"))
-                return (end - start).total_seconds()
-        except (ValueError, TypeError):
-            pass
-        return 0.0
 
     def get_real_tool_count(self) -> int:
         return sum(

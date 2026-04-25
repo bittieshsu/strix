@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from agents import Runner
 from agents.memory import SQLiteSession
-from agents.tracing import add_trace_processor
 
 from strix.agents.factory import build_strix_agent, make_child_factory
 from strix.config.config import Config
@@ -36,7 +35,6 @@ from strix.run_config_factory import (
 )
 from strix.sandbox import session_manager
 from strix.sandbox.healthcheck import wait_for_http_ready, wait_for_tcp_ready
-from strix.telemetry.strix_processor import StrixTracingProcessor
 
 
 if TYPE_CHECKING:
@@ -202,18 +200,6 @@ async def run_strix_scan(
     if bus is None:
         bus = AgentMessageBus()
     root_id = uuid.uuid4().hex[:8]
-
-    # Wire SDK tracing into the scan's run-directory ``events.jsonl``.
-    # ``add_trace_processor`` is idempotent at the provider level — if
-    # the user runs multiple scans in one process they each get their
-    # own processor, all writing to their respective run dirs.
-    if tracer is not None:
-        try:
-            run_dir = tracer.get_run_dir() if hasattr(tracer, "get_run_dir") else None
-            if run_dir is not None:
-                add_trace_processor(StrixTracingProcessor(run_dir))
-        except Exception:
-            logger.exception("Failed to register StrixTracingProcessor")
 
     bundle = await session_manager.create_or_reuse(
         scan_id,
