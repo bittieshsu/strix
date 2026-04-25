@@ -1,9 +1,9 @@
-"""StrixSession — Session wrapper that runs the legacy MemoryCompressor.
+"""StrixSession — Session wrapper that runs the MemoryCompressor.
 
 The SDK's `Session` (and ``SessionABC``) protocol owns conversation history
 storage. We delegate the actual storage to any underlying session
 implementation (in-memory, SQLite, Redis, …) and intercept ``get_items`` so
-the legacy ``MemoryCompressor`` runs before the model sees the history.
+the ``MemoryCompressor`` runs before the model sees the history.
 
 Why wrap rather than reimplement:
 - ``MemoryCompressor`` already encodes the pentest-tuned summarization

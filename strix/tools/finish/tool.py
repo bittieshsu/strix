@@ -27,8 +27,8 @@ from typing import Any
 from agents import RunContextWrapper
 
 from strix.tools._decorator import strix_tool
-from strix.tools._legacy_adapter import adapter_from_ctx
-from strix.tools.finish import finish_actions as _legacy
+from strix.tools._state_adapter import adapter_from_ctx
+from strix.tools.finish import finish_actions as _impl
 
 
 def _dump(result: dict[str, Any]) -> str:
@@ -57,7 +57,7 @@ async def finish_scan(
     state = adapter_from_ctx(ctx)
     return _dump(
         await asyncio.to_thread(
-            _legacy.finish_scan,
+            _impl.finish_scan,
             executive_summary=executive_summary,
             methodology=methodology,
             technical_analysis=technical_analysis,

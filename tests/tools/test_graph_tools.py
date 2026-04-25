@@ -29,7 +29,7 @@ import pytest
 from agents.tool import FunctionTool
 
 from strix.orchestration.bus import AgentMessageBus
-from strix.tools.agents_graph.agents_graph_sdk_tools import (
+from strix.tools.agents_graph.tools import (
     agent_finish,
     agent_status,
     create_agent,
@@ -289,7 +289,7 @@ async def test_create_agent_spawns_and_registers_child() -> None:
     )
 
     with patch(
-        "strix.tools.agents_graph.agents_graph_sdk_tools.Runner.run",
+        "strix.tools.agents_graph.tools.Runner.run",
         side_effect=fake_runner_run,
     ):
         out = await _invoke(
@@ -361,7 +361,7 @@ async def test_create_agent_inherits_parent_history() -> None:
     )
 
     with patch(
-        "strix.tools.agents_graph.agents_graph_sdk_tools.Runner.run",
+        "strix.tools.agents_graph.tools.Runner.run",
         side_effect=fake_runner_run,
     ):
         await _invoke(
@@ -493,7 +493,7 @@ async def test_create_agent_spawn_is_cancelable_via_bus() -> None:
 
     runner_mock = AsyncMock(side_effect=slow_runner_run)
     with patch(
-        "strix.tools.agents_graph.agents_graph_sdk_tools.Runner.run",
+        "strix.tools.agents_graph.tools.Runner.run",
         new=runner_mock,
     ):
         out = await _invoke(

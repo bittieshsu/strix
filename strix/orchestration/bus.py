@@ -1,8 +1,8 @@
 """AgentMessageBus — peer-to-peer multi-agent state owned by Strix.
 
-Replaces the legacy harness's _agent_graph / _agent_messages / _agent_instances
-globals (in strix/tools/agents_graph/agents_graph_actions.py) with a single
-asyncio.Lock-protected dataclass that lives for the lifetime of one Strix scan.
+A single ``asyncio.Lock``-protected dataclass that owns inboxes,
+parent edges, statuses, and per-agent stats for the lifetime of one
+Strix scan.
 
 References:
     - PLAYBOOK.md §2.3

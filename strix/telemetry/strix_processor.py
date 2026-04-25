@@ -1,10 +1,8 @@
 """StrixTracingProcessor — SDK trace processor that writes events.jsonl.
 
-Replaces the JSONL output that the legacy tracer wrote in ``telemetry/tracer.py``.
-Hooks into the SDK's tracing pipeline so we keep the existing
-``strix_runs/<run-name>/events.jsonl`` schema and the existing
-``TelemetrySanitizer`` PII redaction without standing up a parallel
-tracing system.
+Hooks into the SDK's tracing pipeline and writes events to
+``strix_runs/<run-name>/events.jsonl``. PII scrubbing via the existing
+``TelemetrySanitizer``.
 
 References:
     - PLAYBOOK.md §2.9
@@ -36,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Module-level lock registry — one per JSONL file so two processors writing
 # different run-dirs don't serialize unnecessarily, but two processors
-# writing the *same* run-dir (e.g., legacy tracer + SDK processor) do.
+# writing the *same* run-dir do.
 _FILE_LOCKS: dict[Path, threading.Lock] = {}
 _GUARD = threading.Lock()
 
@@ -58,8 +56,8 @@ class StrixTracingProcessor(TracingProcessor):
     permission error during the run does NOT propagate up the hook chain
     and tear down the agent (C16).
 
-    PII scrubbing runs on every event before it hits the file. The
-    ``TelemetrySanitizer`` class is the same one the legacy tracer uses.
+    PII scrubbing via :class:`TelemetrySanitizer` runs on every event
+    before it hits the file.
     """
 
     def __init__(

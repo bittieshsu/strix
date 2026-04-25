@@ -10,7 +10,6 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from strix.telemetry import tracer as tracer_module
 from strix.telemetry import utils as telemetry_utils
 from strix.telemetry.tracer import Tracer, set_global_tracer
-from strix.tools.agents_graph import agents_graph_actions
 
 
 def _load_events(events_path: Path) -> list[dict[str, Any]]:
@@ -19,7 +18,7 @@ def _load_events(events_path: Path) -> list[dict[str, Any]]:
 
 
 @pytest.fixture(autouse=True)
-def _reset_tracer_globals(monkeypatch) -> None:
+def _reset_tracer_globals(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tracer_module, "_global_tracer", None)
     monkeypatch.setattr(tracer_module, "_OTEL_BOOTSTRAPPED", False)
     monkeypatch.setattr(tracer_module, "_OTEL_REMOTE_ENABLED", False)
@@ -32,7 +31,9 @@ def _reset_tracer_globals(monkeypatch) -> None:
     monkeypatch.delenv("TRACELOOP_HEADERS", raising=False)
 
 
-def test_tracer_local_mode_writes_jsonl_with_correlation(monkeypatch, tmp_path) -> None:
+def test_tracer_local_mode_writes_jsonl_with_correlation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     tracer = Tracer("local-observability")
@@ -60,7 +61,7 @@ def test_tracer_local_mode_writes_jsonl_with_correlation(monkeypatch, tmp_path) 
         assert event["span_id"]
 
 
-def test_tracer_redacts_sensitive_payloads(monkeypatch, tmp_path) -> None:
+def test_tracer_redacts_sensitive_payloads(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
     tracer = Tracer("redaction-run")
@@ -89,7 +90,9 @@ def test_tracer_redacts_sensitive_payloads(monkeypatch, tmp_path) -> None:
     assert "[REDACTED]" in serialized
 
 
-def test_tracer_remote_mode_configures_traceloop_export(monkeypatch, tmp_path) -> None:
+def test_tracer_remote_mode_configures_traceloop_export(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeTraceloop:
@@ -128,7 +131,9 @@ def test_tracer_remote_mode_configures_traceloop_export(monkeypatch, tmp_path) -
     assert run_started["payload"]["remote_export_enabled"] is True
 
 
-def test_tracer_local_mode_avoids_traceloop_remote_endpoint(monkeypatch, tmp_path) -> None:
+def test_tracer_local_mode_avoids_traceloop_remote_endpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeTraceloop:
@@ -157,7 +162,9 @@ def test_tracer_local_mode_avoids_traceloop_remote_endpoint(monkeypatch, tmp_pat
     assert tracer._remote_export_enabled is False
 
 
-def test_otlp_fallback_includes_auth_and_custom_headers(monkeypatch, tmp_path) -> None:
+def test_otlp_fallback_includes_auth_and_custom_headers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(tracer_module, "Traceloop", None)
     monkeypatch.setenv("TRACELOOP_BASE_URL", "https://otel.example.com")
@@ -172,13 +179,13 @@ def test_otlp_fallback_includes_auth_and_custom_headers(monkeypatch, tmp_path) -
             captured["headers"] = headers or {}
             captured["kwargs"] = kwargs
 
-        def export(self, spans: Any) -> SpanExportResult:  # noqa: ARG002
+        def export(self, spans: Any) -> SpanExportResult:
             return SpanExportResult.SUCCESS
 
         def shutdown(self) -> None:
             return None
 
-        def force_flush(self, timeout_millis: int = 30_000) -> bool:  # noqa: ARG002
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
             return True
 
     fake_module = types.ModuleType("opentelemetry.exporter.otlp.proto.http.trace_exporter")
@@ -199,7 +206,8 @@ def test_otlp_fallback_includes_auth_and_custom_headers(monkeypatch, tmp_path) -
 
 
 def test_traceloop_init_failure_does_not_mark_bootstrapped_on_provider_failure(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -226,7 +234,7 @@ def test_traceloop_init_failure_does_not_mark_bootstrapped_on_provider_failure(
     assert tracer._remote_export_enabled is False
 
 
-def test_run_completed_event_emitted_once(monkeypatch, tmp_path) -> None:
+def test_run_completed_event_emitted_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
     tracer = Tracer("single-complete")
@@ -240,7 +248,9 @@ def test_run_completed_event_emitted_once(monkeypatch, tmp_path) -> None:
     assert len(run_completed) == 1
 
 
-def test_events_with_agent_id_include_agent_name(monkeypatch, tmp_path) -> None:
+def test_events_with_agent_id_include_agent_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     tracer = Tracer("agent-name-enrichment")
@@ -256,61 +266,32 @@ def test_events_with_agent_id_include_agent_name(monkeypatch, tmp_path) -> None:
     assert chat_event["actor"]["agent_name"] == "Root Agent"
 
 
-def test_get_total_llm_stats_includes_completed_subagents(monkeypatch, tmp_path) -> None:
+def test_get_total_llm_stats_aggregates_live_and_completed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
-
-    class DummyStats:
-        def __init__(
-            self,
-            *,
-            input_tokens: int,
-            output_tokens: int,
-            cached_tokens: int,
-            cost: float,
-            requests: int,
-        ) -> None:
-            self.input_tokens = input_tokens
-            self.output_tokens = output_tokens
-            self.cached_tokens = cached_tokens
-            self.cost = cost
-            self.requests = requests
-
-    class DummyLLM:
-        def __init__(self, stats: DummyStats) -> None:
-            self._total_stats = stats
-
-    class DummyAgent:
-        def __init__(self, stats: DummyStats) -> None:
-            self.llm = DummyLLM(stats)
-
     tracer = Tracer("cost-rollup")
     set_global_tracer(tracer)
 
-    monkeypatch.setattr(
-        agents_graph_actions,
-        "_agent_instances",
-        {
-            "root-agent": DummyAgent(
-                DummyStats(
-                    input_tokens=1_000,
-                    output_tokens=250,
-                    cached_tokens=100,
-                    cost=0.12345,
-                    requests=2,
-                )
-            )
-        },
+    # Live agent (still running).
+    tracer.record_llm_usage(
+        agent_id="root-agent",
+        input_tokens=1_000,
+        output_tokens=250,
+        cached_tokens=100,
+        cost=0.12345,
+        requests=2,
+        bucket="live",
     )
-    monkeypatch.setattr(
-        agents_graph_actions,
-        "_completed_agent_llm_totals",
-        {
-            "input_tokens": 2_000,
-            "output_tokens": 500,
-            "cached_tokens": 400,
-            "cost": 0.54321,
-            "requests": 3,
-        },
+    # Completed agents (finalized — moved by on_agent_end hook).
+    tracer.record_llm_usage(
+        agent_id="child-1",
+        input_tokens=2_000,
+        output_tokens=500,
+        cached_tokens=400,
+        cost=0.54321,
+        requests=3,
+        bucket="completed",
     )
 
     stats = tracer.get_total_llm_stats()
@@ -325,7 +306,9 @@ def test_get_total_llm_stats_includes_completed_subagents(monkeypatch, tmp_path)
     assert stats["total_tokens"] == 3_750
 
 
-def test_run_metadata_is_only_on_run_lifecycle_events(monkeypatch, tmp_path) -> None:
+def test_run_metadata_is_only_on_run_lifecycle_events(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     tracer = Tracer("metadata-scope")
@@ -345,7 +328,7 @@ def test_run_metadata_is_only_on_run_lifecycle_events(monkeypatch, tmp_path) -> 
     assert "run_metadata" not in chat_event
 
 
-def test_set_run_name_resets_cached_paths(monkeypatch, tmp_path) -> None:
+def test_set_run_name_resets_cached_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
     tracer = Tracer()
@@ -364,7 +347,9 @@ def test_set_run_name_resets_cached_paths(monkeypatch, tmp_path) -> None:
     assert any(event["event_type"] == "chat.message" for event in events)
 
 
-def test_set_run_name_resets_run_completed_flag(monkeypatch, tmp_path) -> None:
+def test_set_run_name_resets_run_completed_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     tracer = Tracer()
@@ -382,7 +367,9 @@ def test_set_run_name_resets_run_completed_flag(monkeypatch, tmp_path) -> None:
     assert len(run_completed) == 1
 
 
-def test_set_run_name_updates_traceloop_association_properties(monkeypatch, tmp_path) -> None:
+def test_set_run_name_updates_traceloop_association_properties(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeTraceloop:
@@ -407,7 +394,9 @@ def test_set_run_name_updates_traceloop_association_properties(monkeypatch, tmp_
     assert FakeTraceloop.associations[-1]["run_name"] == "renamed-run"
 
 
-def test_events_write_locks_are_scoped_by_events_file(monkeypatch, tmp_path) -> None:
+def test_events_write_locks_are_scoped_by_events_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("STRIX_TELEMETRY", "0")
 
@@ -422,7 +411,9 @@ def test_events_write_locks_are_scoped_by_events_file(monkeypatch, tmp_path) -> 
     assert lock_a_from_one is not lock_b
 
 
-def test_tracer_skips_jsonl_when_telemetry_disabled(monkeypatch, tmp_path) -> None:
+def test_tracer_skips_jsonl_when_telemetry_disabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("STRIX_TELEMETRY", "0")
 
@@ -435,7 +426,9 @@ def test_tracer_skips_jsonl_when_telemetry_disabled(monkeypatch, tmp_path) -> No
     assert not events_path.exists()
 
 
-def test_tracer_otel_flag_overrides_global_telemetry(monkeypatch, tmp_path) -> None:
+def test_tracer_otel_flag_overrides_global_telemetry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("STRIX_TELEMETRY", "0")
     monkeypatch.setenv("STRIX_OTEL_TELEMETRY", "1")

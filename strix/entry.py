@@ -1,7 +1,4 @@
-"""Top-level SDK scan entry point.
-
-Replaces the legacy ``strix.cli.main → StrixAgent.execute_scan``
-pipeline with the SDK-native equivalent:
+"""Top-level scan entry point.
 
 1. Build the per-scan ``AgentMessageBus``.
 2. Bring up (or reuse) a sandbox session for ``scan_id`` via the
@@ -12,16 +9,8 @@ pipeline with the SDK-native equivalent:
 5. Register the root in the bus.
 6. Build the ``RunConfig`` via the factory.
 7. Call ``Runner.run(...)`` and surface the result.
-8. ``finally`` cleanup the sandbox session.
-
-Phase 5 lands the wiring; the streaming accumulator + TUI integration
-land in Phase 5b. The entry point is intentionally not wired to the
-CLI yet — that's a follow-up under ``STRIX_USE_SDK_HARNESS=1`` (see
-PLAYBOOK §7.1 cutover plan).
-
-References:
-    - PLAYBOOK.md §3.3 (session manager), §4.3 (graph tools), §7.1
-    - AUDIT_R3.md C9 (cancel_descendants on cleanup)
+8. ``finally`` cleanup the sandbox session — even on cancel, the bus
+   propagates ``cancel_descendants`` to every spawned child task.
 """
 
 from __future__ import annotations
@@ -33,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from agents import Runner
 
-from strix.agents.sdk_factory import build_strix_agent, make_child_factory
+from strix.agents.factory import build_strix_agent, make_child_factory
 from strix.orchestration.bus import AgentMessageBus
 from strix.orchestration.hooks import StrixOrchestrationHooks
 from strix.run_config_factory import (
@@ -54,11 +43,10 @@ logger = logging.getLogger(__name__)
 def _build_root_task(scan_config: dict[str, Any]) -> str:
     """Format the user-facing task for the root agent.
 
-    Mirrors :py:meth:`StrixAgent.execute_scan` (legacy) — collects each
-    target type into a labelled section, appends diff-scope context if
-    active, and tacks on user_instructions. The structured shape is
-    important for prompt parity: the system prompt template references
-    these section headers.
+    Collects each target type into a labelled section, appends
+    diff-scope context if active, and tacks on user_instructions. The
+    structured section headers are referenced by the system prompt
+    template, so the shape matters for prompt parity.
     """
     targets = scan_config.get("targets", []) or []
     diff_scope = scan_config.get("diff_scope") or {}
@@ -128,10 +116,8 @@ def _build_root_task(scan_config: dict[str, Any]) -> str:
 def _build_scope_context(scan_config: dict[str, Any]) -> dict[str, Any]:
     """Produce the system_prompt_context block used by the prompt template.
 
-    Same shape as the legacy
-    :py:meth:`StrixAgent._build_system_scope_context` so the prompt
-    template's ``system_prompt_context.authorized_targets`` lookups
-    stay byte-identical.
+    The prompt template's ``system_prompt_context.authorized_targets``
+    lookups expect this exact shape.
     """
     authorized: list[dict[str, str]] = []
     for target in scan_config.get("targets", []) or []:
@@ -177,9 +163,9 @@ async def run_strix_scan(
     """Run one Strix scan end-to-end against a freshly-prepared sandbox.
 
     Args:
-        scan_config: Same shape the legacy ``StrixAgent.execute_scan``
-            takes (targets, user_instructions, diff_scope, scan_mode,
-            is_whitebox, skills).
+        scan_config: Per-scan configuration — ``targets``,
+            ``user_instructions``, ``diff_scope``, ``scan_mode``,
+            ``is_whitebox``, ``skills``.
         scan_id: Used to key the sandbox session cache. Auto-generated
             if omitted — callers that want resume-after-crash semantics
             should pass a stable id.
@@ -190,8 +176,7 @@ async def run_strix_scan(
             telemetry hook chain. Pass ``None`` for unit tests.
         interactive: Renders the interactive-mode prompt block on the
             root agent.
-        max_turns: Cap on root-agent LLM turns. Mirrors legacy
-            ``AgentState.max_iterations`` (300).
+        max_turns: Cap on root-agent LLM turns (default 300).
         cleanup_on_exit: When True (default), tears down the sandbox
             session in a ``finally``. Set to False for resume scenarios
             where the caller wants to preserve the container.

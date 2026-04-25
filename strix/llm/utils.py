@@ -1,3 +1,15 @@
+"""Streaming + tool-format helpers used by the TUI's render pipeline.
+
+The model can emit tool calls in a few XML shapes (``<function=…>``,
+``<invoke name="…">``, optionally wrapped in ``<function_calls>``); the
+streaming parser normalizes them into one canonical form so the
+renderer doesn't have to branch.
+
+These helpers are pure string manipulation — no model client, no SDK
+dependency. They live here because the streaming parser and the
+agent-message renderer both consume them.
+"""
+
 import html
 import re
 from typing import Any
@@ -27,54 +39,9 @@ def normalize_tool_format(content: str) -> str:
         content = content.replace("</invoke>", "</function>")
 
     return _STRIP_TAG_QUOTES.sub(
-        lambda m: f"<{m.group(1)}={m.group(2).strip().strip(chr(34) + chr(39))}>", content
+        lambda m: f"<{m.group(1)}={m.group(2).strip().strip(chr(34) + chr(39))}>",
+        content,
     )
-
-
-STRIX_MODEL_MAP: dict[str, str] = {
-    "claude-sonnet-4.6": "anthropic/claude-sonnet-4-6",
-    "claude-opus-4.6": "anthropic/claude-opus-4-6",
-    "gpt-5.2": "openai/gpt-5.2",
-    "gpt-5.1": "openai/gpt-5.1",
-    "gpt-5.4": "openai/gpt-5.4",
-    "gemini-3-pro-preview": "gemini/gemini-3-pro-preview",
-    "gemini-3-flash-preview": "gemini/gemini-3-flash-preview",
-    "glm-5": "openrouter/z-ai/glm-5",
-    "glm-4.7": "openrouter/z-ai/glm-4.7",
-}
-
-
-def resolve_strix_model(model_name: str | None) -> tuple[str | None, str | None]:
-    """Resolve a strix/ model into names for API calls and capability lookups.
-
-    Returns (api_model, canonical_model):
-    - api_model: openai/<base> for API calls (Strix API is OpenAI-compatible)
-    - canonical_model: actual provider model name for litellm capability lookups
-    Non-strix models return the same name for both.
-    """
-    if not model_name or not model_name.startswith("strix/"):
-        return model_name, model_name
-
-    base_model = model_name[6:]
-    api_model = f"openai/{base_model}"
-    canonical_model = STRIX_MODEL_MAP.get(base_model, api_model)
-    return api_model, canonical_model
-
-
-def _truncate_to_first_function(content: str) -> str:
-    if not content:
-        return content
-
-    function_starts = [
-        match.start() for match in re.finditer(r"<function=|<invoke\s+name=", content)
-    ]
-
-    if len(function_starts) >= 2:
-        second_function_start = function_starts[1]
-
-        return content[:second_function_start].rstrip()
-
-    return content
 
 
 def parse_tool_invocations(content: str) -> list[dict[str, Any]] | None:

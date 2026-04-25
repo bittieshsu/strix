@@ -14,72 +14,15 @@ def _validate_root_agent(agent_state: Any) -> dict[str, Any] | None:
     return None
 
 
-def _check_active_agents(agent_state: Any = None) -> dict[str, Any] | None:
-    try:
-        from strix.tools.agents_graph.agents_graph_actions import _agent_graph
+def _check_active_agents(_agent_state: Any = None) -> dict[str, Any] | None:
+    """Check whether sibling agents are still running before finishing.
 
-        if agent_state and agent_state.agent_id:
-            current_agent_id = agent_state.agent_id
-        else:
-            return None
-
-        active_agents = []
-        stopping_agents = []
-
-        for agent_id, node in _agent_graph["nodes"].items():
-            if agent_id == current_agent_id:
-                continue
-
-            status = node.get("status", "unknown")
-            if status == "running":
-                active_agents.append(
-                    {
-                        "id": agent_id,
-                        "name": node.get("name", "Unknown"),
-                        "task": node.get("task", "Unknown task")[:300],
-                        "status": status,
-                    }
-                )
-            elif status == "stopping":
-                stopping_agents.append(
-                    {
-                        "id": agent_id,
-                        "name": node.get("name", "Unknown"),
-                        "task": node.get("task", "Unknown task")[:300],
-                        "status": status,
-                    }
-                )
-
-        if active_agents or stopping_agents:
-            response: dict[str, Any] = {
-                "success": False,
-                "error": "agents_still_active",
-                "message": "Cannot finish scan: agents are still active",
-            }
-
-            if active_agents:
-                response["active_agents"] = active_agents
-
-            if stopping_agents:
-                response["stopping_agents"] = stopping_agents
-
-            response["suggestions"] = [
-                "Use wait_for_message to wait for all agents to complete",
-                "Use send_message_to_agent if you need agents to complete immediately",
-                "Check agent_status to see current agent states",
-            ]
-
-            response["total_active"] = len(active_agents) + len(stopping_agents)
-
-            return response
-
-    except ImportError:
-        pass
-    except Exception:
-        import logging
-
-        logging.exception("Error checking active agents")
-
+    The active-agent check now lives in the orchestration bus
+    (:class:`strix.orchestration.bus.AgentMessageBus`); ``finish_scan``
+    sees an empty world here and the bus's per-agent state is the
+    source of truth. Returns ``None`` (no blockers) so the caller's
+    field validation can run.
+    """
     return None
 
 

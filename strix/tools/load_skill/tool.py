@@ -23,8 +23,8 @@ from typing import Any
 from agents import RunContextWrapper
 
 from strix.tools._decorator import strix_tool
-from strix.tools._legacy_adapter import adapter_from_ctx
-from strix.tools.load_skill import load_skill_actions as _legacy
+from strix.tools._state_adapter import adapter_from_ctx
+from strix.tools.load_skill import load_skill_actions as _impl
 
 
 def _dump(result: dict[str, Any]) -> str:
@@ -42,5 +42,5 @@ async def load_skill(ctx: RunContextWrapper, skills: str) -> str:
     """
     state = adapter_from_ctx(ctx)
     return _dump(
-        await asyncio.to_thread(_legacy.load_skill, agent_state=state, skills=skills),
+        await asyncio.to_thread(_impl.load_skill, agent_state=state, skills=skills),
     )

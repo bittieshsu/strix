@@ -1,19 +1,12 @@
-"""Standalone Jinja-based system-prompt renderer for SDK agents.
+"""Jinja-based system-prompt renderer.
 
-The legacy ``LLM._load_system_prompt`` couples prompt rendering to the
-LLM client class. The SDK migration owns the model client through
-``MultiProvider`` instead, so we extract the rendering logic into a
-plain function that the SDK agent factory can call without pulling in
-the legacy ``LLM`` instance.
-
-Reuses the existing Jinja template at
-``strix/agents/StrixAgent/system_prompt.jinja`` (508 lines, expanding
-into the multi-section prompt with skills, tools, scan modes, etc.) so
-behavior parity is preserved verbatim — only the call site changes.
+Loads ``strix/agents/prompts/system_prompt.jinja`` (508 lines — the
+multi-section production prompt with skills, tools, scan modes, etc.)
+and renders it with the caller's per-run context (scan mode, whitebox,
+interactive, scope authorization block).
 
 References:
     - HARNESS_WIKI.md §4.1 (system prompt assembly)
-    - PLAYBOOK.md §4 (per-tool migration contracts)
 """
 
 from __future__ import annotations
@@ -31,10 +24,7 @@ from strix.utils.resource_paths import get_strix_resource_path
 logger = logging.getLogger(__name__)
 
 
-# Hard-coded to the StrixAgent template since it's the only agent type
-# under the SDK migration. The legacy harness supported multiple agent
-# names but in practice only StrixAgent ships.
-_AGENT_NAME = "StrixAgent"
+_PROMPT_DIRNAME = "prompts"
 
 
 def _resolve_skills(
@@ -45,8 +35,7 @@ def _resolve_skills(
 ) -> list[str]:
     """Build the deduped, ordered skills list for the prompt render.
 
-    Mirrors :py:meth:`LLM._get_skills_to_load` exactly so the rendered
-    prompt is byte-identical to the legacy path:
+    Order:
 
     1. Whatever the caller asked for, in order.
     2. ``scan_modes/<mode>`` (always).
@@ -75,7 +64,7 @@ def render_system_prompt(
     interactive: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
 ) -> str:
-    """Render the StrixAgent system prompt.
+    """Render the system prompt.
 
     Args:
         skills: Skills the caller wants preloaded into the prompt
@@ -88,17 +77,16 @@ def render_system_prompt(
         interactive: When True, the prompt renders the interactive-mode
             communication rules block.
         system_prompt_context: Free-form dict that the template's
-            ``system_prompt_context`` variable receives — used today for
-            the scan-scope authorization block from
-            :py:meth:`StrixAgent._build_system_scope_context`.
+            ``system_prompt_context`` variable receives — carries the
+            scan-scope authorization block.
 
     Returns the rendered prompt string. If anything goes wrong (template
-    missing, render failure), returns an empty string and logs — same
-    fail-soft posture as the legacy method, because a missing prompt is
-    survivable but a hard failure during agent construction is not.
+    missing, render failure), returns an empty string and logs — a
+    missing prompt is survivable, a hard failure during agent
+    construction is not.
     """
     try:
-        prompt_dir = get_strix_resource_path("agents", _AGENT_NAME)
+        prompt_dir = get_strix_resource_path("agents", _PROMPT_DIRNAME)
         skills_dir = get_strix_resource_path("skills")
         env = Environment(
             loader=FileSystemLoader([prompt_dir, skills_dir]),

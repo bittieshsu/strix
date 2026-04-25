@@ -15,8 +15,6 @@ Other prefixes fall through to the SDK's built-in OpenAI / LiteLLM defaults.
 References:
     - PLAYBOOK.md §2.7
     - AUDIT_R3.md C17 (model alias validation; raise UserError on unknown alias)
-    - Legacy: strix/llm/utils.py STRIX_MODEL_MAP and resolve_strix_model
-    - Legacy: strix/config/config.py STRIX_API_BASE
 """
 
 from __future__ import annotations
@@ -28,7 +26,23 @@ from agents.models.multi_provider import MultiProvider, MultiProviderMap
 
 from strix.config.config import STRIX_API_BASE
 from strix.llm.anthropic_cache_wrapper import AnthropicCachingLitellmModel
-from strix.llm.utils import STRIX_MODEL_MAP
+
+
+# Strix-proxy aliases. Each maps the user-facing alias (right of
+# ``strix/``) to the canonical provider/model used for capability
+# lookups (litellm reads e.g. ``anthropic/claude-sonnet-4-6`` to
+# decide on prompt-caching support).
+STRIX_MODEL_MAP: dict[str, str] = {
+    "claude-sonnet-4.6": "anthropic/claude-sonnet-4-6",
+    "claude-opus-4.6": "anthropic/claude-opus-4-6",
+    "gpt-5.2": "openai/gpt-5.2",
+    "gpt-5.1": "openai/gpt-5.1",
+    "gpt-5.4": "openai/gpt-5.4",
+    "gemini-3-pro-preview": "gemini/gemini-3-pro-preview",
+    "gemini-3-flash-preview": "gemini/gemini-3-flash-preview",
+    "glm-5": "openrouter/z-ai/glm-5",
+    "glm-4.7": "openrouter/z-ai/glm-4.7",
+}
 
 
 def _is_anthropic_canonical(canonical: str) -> bool:

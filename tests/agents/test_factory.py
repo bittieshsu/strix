@@ -21,8 +21,8 @@ from unittest.mock import patch
 from agents import Agent
 from agents.tool import FunctionTool
 
-from strix.agents.sdk_factory import build_strix_agent, make_child_factory
-from strix.agents.sdk_prompt import _resolve_skills, render_system_prompt
+from strix.agents.factory import build_strix_agent, make_child_factory
+from strix.agents.prompt import _resolve_skills, render_system_prompt
 
 
 # --- prompt renderer ----------------------------------------------------
@@ -60,7 +60,7 @@ def test_render_system_prompt_swallows_template_errors() -> None:
     """If the template path can't be resolved, return an empty string
     (not raise) — agent construction must never blow up on prompt load."""
     with patch(
-        "strix.agents.sdk_prompt.get_strix_resource_path",
+        "strix.agents.prompt.get_strix_resource_path",
         side_effect=RuntimeError("missing"),
     ):
         out = render_system_prompt(skills=[])
@@ -191,7 +191,7 @@ def test_make_child_factory_passes_scan_level_config() -> None:
         interactive=True,
         system_prompt_context={"scope_source": "test"},
     )
-    with patch("strix.agents.sdk_factory.render_system_prompt", side_effect=fake_render):
+    with patch("strix.agents.factory.render_system_prompt", side_effect=fake_render):
         factory(name="child", skills=["xss"])
 
     assert captured["scan_mode"] == "fast"

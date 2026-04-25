@@ -8,7 +8,7 @@ for the rare case a single run wants different reasoning effort or
 References:
     - PLAYBOOK.md §2.10
     - AUDIT.md §2.1 (C1 — parallel_tool_calls=False until Phase 6 relaxes the
-      legacy tool server's per-agent task slot serialization)
+      tool server's per-agent task slot serialization)
     - AUDIT_R2.md §1.6 (C11 — retry policy explicitly excludes 401/403/400;
       auth and validation errors must fail fast, not waste retries)
     - AUDIT_R3.md C21 — RunConfig override + context fields including
@@ -39,9 +39,9 @@ if TYPE_CHECKING:
     from strix.orchestration.bus import AgentMessageBus
 
 
-# Phase 1-5 default. Phase 6 relaxes the legacy tool server's per-agent
-# task-slot serialization (``runtime/tool_server.py:94-97``) and flips this
-# to ``True`` after the multi-agent stress tests confirm safety.
+# Phase 6 relaxes the tool server's per-agent task-slot serialization
+# (``runtime/tool_server.py:94-97``) and flips this to ``True`` after
+# multi-agent stress tests confirm safety.
 _PHASE1_PARALLEL_DEFAULT = False
 
 # Default retry policy. Explicitly does NOT include 401/403/400 — those are
@@ -49,8 +49,7 @@ _PHASE1_PARALLEL_DEFAULT = False
 # so the user sees the real error within seconds. 429/5xx is the right set.
 _RETRYABLE_HTTP_STATUSES = (429, 500, 502, 503, 504)
 
-# Default retry budget. Mirrors the legacy ``llm.py`` retry loop: 5 attempts
-# with ``min(90, 2*2^n)`` backoff.
+# Default retry budget: 5 attempts with ``min(90, 2*2^n)`` backoff.
 _DEFAULT_MAX_RETRIES = 5
 _DEFAULT_BACKOFF = ModelRetryBackoffSettings(
     initial_delay=2.0,
@@ -76,8 +75,6 @@ def _default_retry_policy() -> Any:
 
 
 #: Default ``max_turns`` callers should pass to ``Runner.run``.
-#: Mirrors the legacy ``AgentState.max_iterations = 300``
-#: (``HARNESS_WIKI.md §5.2``).
 STRIX_DEFAULT_MAX_TURNS = 300
 
 
@@ -105,11 +102,10 @@ def make_run_config(
             ``None`` is allowed for unit tests and dry runs.
         model: Model alias to pass to ``MultiProvider``. Defaults to the
             current production-favored Anthropic alias.
-        parallel_tool_calls: Phase 1 default is ``False`` to keep behavior
-            sequential per the legacy tool server's slot serialization (C1).
+        parallel_tool_calls: Default ``False`` to keep behavior sequential
+            per the tool server's slot serialization (C1).
         tool_choice: Forces tool use per turn unless explicitly relaxed.
-            Mirrors the legacy ``4f90a56`` prompt hardening at the model
-            level. Pass ``None`` to omit.
+            Pass ``None`` to omit.
         reasoning_effort: ``"low" | "medium" | "high"``; routes to
             ``ModelSettings.reasoning``. ``None`` defers to provider default.
         model_settings_override: Optional ``ModelSettings`` to merge over
@@ -182,15 +178,10 @@ def make_agent_context(
     tracer reference, and per-agent toggles live. Tools, hooks, and the
     ``inject_messages_filter`` all reach in via ``ctx.context.get(...)``.
 
-    C21 (AUDIT_R3): includes ``is_whitebox``, ``diff_scope`` and ``run_id``
-    fields that the legacy code relied on but the original PLAYBOOK §2.10
-    skeleton omitted.
-
     ``agent_factory`` is a callable ``(name, skills) -> agents.Agent`` used by
-    the ``create_agent`` graph tool to spin up children. The actual factory
-    lives in the Phase 4/5 root-assembly module; Phase 3 only requires that
-    it be present in context. ``sandbox_client`` is the host-side Docker
-    subclass; ``create_agent`` reuses it across child runs.
+    the ``create_agent`` graph tool to spin up children. ``sandbox_client``
+    is the host-side Docker subclass; ``create_agent`` reuses it across
+    child runs.
     """
     return {
         "bus": bus,

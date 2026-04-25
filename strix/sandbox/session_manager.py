@@ -1,8 +1,6 @@
 """Per-scan sandbox session lifecycle.
 
-Replaces the legacy ``DockerRuntime`` (``strix/runtime/docker_runtime.py``)
-with the SDK-native session model. One session per scan, reused across
-every agent in that scan's tree.
+One session per scan, reused across every agent in that scan's tree.
 
 The bundle returned by :func:`create_or_reuse` is what the per-agent
 context dict reads from in ``run_config_factory.make_agent_context`` —
@@ -17,7 +15,6 @@ next scan from starting.
 
 References:
     - PLAYBOOK.md §3.3
-    - HARNESS_WIKI.md §6 (legacy Docker runtime)
 """
 
 from __future__ import annotations
@@ -119,10 +116,9 @@ async def create_or_reuse(
         ),
     )
 
-    # The SDK's DockerSandboxClient requires a docker.DockerClient instance
-    # at construction time (since openai-agents 0.14.x). We use the
-    # caller's environment to find the daemon — same as the legacy
-    # DockerRuntime did via ``docker.from_env()``.
+    # The SDK's DockerSandboxClient requires a docker.DockerClient
+    # instance at construction time (since openai-agents 0.14.x).
+    # ``docker.from_env()`` reads DOCKER_HOST etc. from the environment.
     client = StrixDockerSandboxClient(docker.from_env())
     options = DockerSandboxClientOptions(
         image=image,

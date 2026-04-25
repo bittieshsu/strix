@@ -286,20 +286,22 @@ ignore = [
 ]
 # SDK function-tool wrappers: the SDK calls get_type_hints() at registration
 # time to derive the JSON schema, which evaluates annotations at runtime —
-# so RunContextWrapper must be imported eagerly, not under TYPE_CHECKING.
-"strix/tools/todo/todo_sdk_tools.py" = ["TC002"]
-"strix/tools/notes/notes_sdk_tools.py" = ["TC002"]
-"strix/tools/thinking/thinking_sdk_tools.py" = ["TC002"]
-"strix/tools/web_search/web_search_sdk_tool.py" = ["TC002"]
-"strix/tools/file_edit/file_edit_sdk_tools.py" = ["TC002"]
-"strix/tools/reporting/reporting_sdk_tools.py" = ["TC002"]
-"strix/tools/load_skill/load_skill_sdk_tool.py" = ["TC002"]
-"strix/tools/finish/finish_sdk_tool.py" = ["TC002"]
-"strix/tools/browser/browser_sdk_tool.py" = ["TC002"]
-"strix/tools/terminal/terminal_sdk_tool.py" = ["TC002"]
-"strix/tools/python/python_sdk_tool.py" = ["TC002"]
-"strix/tools/proxy/proxy_sdk_tools.py" = ["TC002"]
-"strix/tools/agents_graph/agents_graph_sdk_tools.py" = ["TC002"]
+# so RunContextWrapper / Tool / TResponseInputItem must be imported eagerly,
+# not under TYPE_CHECKING.
+"strix/tools/todo/tools.py" = ["TC002"]
+"strix/tools/notes/tools.py" = ["TC002"]
+"strix/tools/thinking/tool.py" = ["TC002"]
+"strix/tools/web_search/tool.py" = ["TC002"]
+"strix/tools/file_edit/tools.py" = ["TC002"]
+"strix/tools/reporting/tool.py" = ["TC002"]
+"strix/tools/load_skill/tool.py" = ["TC002"]
+"strix/tools/finish/tool.py" = ["TC002"]
+"strix/tools/browser/tool.py" = ["TC002"]
+"strix/tools/terminal/tool.py" = ["TC002"]
+"strix/tools/python/tool.py" = ["TC002"]
+"strix/tools/proxy/tools.py" = ["TC002"]
+"strix/tools/agents_graph/tools.py" = ["TC002"]
+"strix/agents/factory.py" = ["TC002"]
 # CaidoCapability uses agents.tool.Tool at runtime — pydantic Field
 # annotations and the cached _CAIDO_TOOLS tuple need it eagerly.
 "strix/sandbox/caido_capability.py" = ["TC002"]
@@ -311,11 +313,23 @@ ignore = [
 # resolution past where mypy needs it. ``_build_root_task`` legitimately
 # walks every supported target type — splitting it into per-type
 # helpers would add indirection without simplifying anything.
-"strix/sdk_entry.py" = ["TC003", "PLR0912"]
+"strix/entry.py" = ["TC003", "PLR0912"]
+# Legacy tracer module — pre-existing PLR/E501 patterns; full refactor
+# is out of scope for the harness migration. ``Callable`` is a runtime
+# annotation on ``vulnerability_found_callback``.
+"strix/telemetry/tracer.py" = ["TC003", "PLR0912", "PLR0915", "E501"]
 # Legacy interface utility with intentionally many branches per supported
 # scope-mode / target-type combination; refactor would obscure the
 # decision tree without simplifying it.
-"strix/interface/utils.py" = ["PLR0912"]
+"strix/interface/utils.py" = ["PLR0912", "BLE001", "PLC0415"]
+# CLI / TUI / main keep extensive lazy imports + broad exception swallows
+# for resilience around terminal-rendering errors. Refactor is out of
+# scope for the harness migration.
+"strix/interface/cli.py" = ["BLE001", "PLC0415"]
+"strix/interface/tui.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915", "SIM105"]
+"strix/interface/main.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
+"strix/interface/streaming_parser.py" = ["PLC0415"]
+"strix/interface/tool_components/agent_message_renderer.py" = ["PLC0415"]
 # Sandbox dispatch helper has many short-circuit error returns (auth fail,
 # size cap, decode fail, etc). Each is a distinct, documented failure mode
 # the model needs to see verbatim — collapsing them harms readability.

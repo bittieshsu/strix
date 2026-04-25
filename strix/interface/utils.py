@@ -20,6 +20,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from strix.config import Config
+
 
 # Token formatting utilities
 def format_token_count(count: float) -> str:
@@ -297,17 +299,15 @@ def build_final_stats_text(tracer: Any) -> Text:
     return stats_text
 
 
-def build_live_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None) -> Text:
+def build_live_stats_text(tracer: Any) -> Text:
     stats_text = Text()
     if not tracer:
         return stats_text
 
-    if agent_config:
-        llm_config = agent_config["llm_config"]
-        model = getattr(llm_config, "model_name", "Unknown")
-        stats_text.append("Model ", style="dim")
-        stats_text.append(model, style="white")
-        stats_text.append("\n")
+    model = Config.get("strix_llm") or "unknown"
+    stats_text.append("Model ", style="dim")
+    stats_text.append(str(model), style="white")
+    stats_text.append("\n")
 
     vuln_count = len(tracer.vulnerability_reports)
     tool_count = tracer.get_real_tool_count()
@@ -370,15 +370,13 @@ def build_live_stats_text(tracer: Any, agent_config: dict[str, Any] | None = Non
     return stats_text
 
 
-def build_tui_stats_text(tracer: Any, agent_config: dict[str, Any] | None = None) -> Text:
+def build_tui_stats_text(tracer: Any) -> Text:
     stats_text = Text()
     if not tracer:
         return stats_text
 
-    if agent_config:
-        llm_config = agent_config["llm_config"]
-        model = getattr(llm_config, "model_name", "Unknown")
-        stats_text.append(model, style="white")
+    model = Config.get("strix_llm") or "unknown"
+    stats_text.append(str(model), style="white")
 
     llm_stats = tracer.get_total_llm_stats()
     total_stats = llm_stats["total"]
@@ -427,7 +425,7 @@ def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None)
         try:
             parsed = urlparse(url)
             return str(parsed.netloc or parsed.path or url)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return str(url)
 
     if target_type == "repository":
@@ -443,7 +441,7 @@ def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None)
         path_str = details.get("target_path", original)
         try:
             return str(Path(path_str).name or path_str)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return str(path_str)
 
     if target_type == "ip_address":

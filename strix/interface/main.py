@@ -20,7 +20,7 @@ from rich.text import Text
 
 from strix.config import Config, apply_saved_config, save_current_config
 from strix.config.config import resolve_llm_config
-from strix.llm.utils import resolve_strix_model
+from strix.llm.multi_provider_setup import STRIX_MODEL_MAP
 
 
 apply_saved_config()
@@ -42,7 +42,9 @@ from strix.interface.utils import (  # noqa: E402
     validate_config_file,
     validate_llm_response,
 )
-from strix.runtime.docker_runtime import HOST_GATEWAY_HOSTNAME  # noqa: E402
+
+
+HOST_GATEWAY_HOSTNAME = "host.docker.internal"
 from strix.telemetry import posthog  # noqa: E402
 from strix.telemetry.tracer import get_global_tracer  # noqa: E402
 
@@ -50,7 +52,7 @@ from strix.telemetry.tracer import get_global_tracer  # noqa: E402
 logging.getLogger().setLevel(logging.ERROR)
 
 
-def validate_environment() -> None:  # noqa: PLR0912, PLR0915
+def validate_environment() -> None:
     console = Console()
     missing_required_vars = []
     missing_optional_vars = []
@@ -209,8 +211,13 @@ async def warm_up_llm() -> None:
 
     try:
         model_name, api_key, api_base = resolve_llm_config()
-        litellm_model, _ = resolve_strix_model(model_name)
-        litellm_model = litellm_model or model_name
+        # ``strix/<alias>`` is routed through the Strix proxy (OpenAI-compatible);
+        # everything else is sent as-is.
+        litellm_model: str | None = model_name
+        if model_name and model_name.startswith("strix/"):
+            base = model_name[len("strix/") :]
+            if base in STRIX_MODEL_MAP:
+                litellm_model = f"openai/{base}"
 
         test_messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -233,7 +240,7 @@ async def warm_up_llm() -> None:
 
         validate_llm_response(response)
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         error_text = Text()
         error_text.append("LLM CONNECTION FAILED", style="bold red")
         error_text.append("\n\n", style="white")
@@ -260,7 +267,7 @@ def get_version() -> str:
         from importlib.metadata import version
 
         return version("strix-agent")
-    except Exception:  # noqa: BLE001
+    except Exception:
         return "unknown"
 
 
@@ -401,7 +408,7 @@ Examples:
                 args.instruction = f.read().strip()
                 if not args.instruction:
                     parser.error(f"Instruction file '{instruction_path}' is empty")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             parser.error(f"Failed to read instruction file '{instruction_path}': {e}")
 
     args.targets_info = []
@@ -544,7 +551,7 @@ def persist_config() -> None:
         save_current_config()
 
 
-def main() -> None:  # noqa: PLR0912, PLR0915
+def main() -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 

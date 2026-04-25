@@ -21,9 +21,15 @@ def _reload_tools_module() -> ModuleType:
     return importlib.import_module("strix.tools")
 
 
-def test_non_sandbox_registers_agents_graph_but_not_browser_or_web_search_when_disabled(
+def test_non_sandbox_skips_browser_and_web_search_when_disabled(
     monkeypatch: Any,
 ) -> None:
+    """Browser registration is gated on STRIX_DISABLE_BROWSER and
+    web_search on PERPLEXITY_API_KEY; both should stay out of the
+    in-container ``register_tool`` registry when their gates are off.
+    Agents_graph is no longer in this registry — those tools are SDK
+    function tools (host-side only), not in-container tools.
+    """
     monkeypatch.setenv("STRIX_SANDBOX_MODE", "false")
     monkeypatch.setenv("STRIX_DISABLE_BROWSER", "true")
     monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
@@ -32,7 +38,6 @@ def test_non_sandbox_registers_agents_graph_but_not_browser_or_web_search_when_d
     tools = _reload_tools_module()
     names = set(tools.get_tool_names())
 
-    assert "create_agent" in names
     assert "browser_action" not in names
     assert "web_search" not in names
 

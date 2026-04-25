@@ -2,7 +2,7 @@
 
 This is the keystone that links Phase 2's SDK function tools, Phase 3's
 graph tools, Phase 4's CaidoCapability, and the rendered Jinja prompt
-from :mod:`strix.agents.sdk_prompt` into a single ``agents.Agent``
+from :mod:`strix.agents.prompt` into a single ``agents.Agent``
 instance ready for ``Runner.run``.
 
 Two flavors:
@@ -38,8 +38,8 @@ from agents import Agent
 from agents.agent import StopAtTools
 from agents.tool import Tool
 
-from strix.agents.sdk_prompt import render_system_prompt
-from strix.tools.agents_graph.agents_graph_sdk_tools import (
+from strix.agents.prompt import render_system_prompt
+from strix.tools.agents_graph.tools import (
     agent_finish,
     agent_status,
     create_agent,
@@ -47,26 +47,26 @@ from strix.tools.agents_graph.agents_graph_sdk_tools import (
     view_agent_graph,
     wait_for_message,
 )
-from strix.tools.browser.browser_sdk_tool import browser_action
-from strix.tools.file_edit.file_edit_sdk_tools import (
+from strix.tools.browser.tool import browser_action
+from strix.tools.file_edit.tools import (
     list_files,
     search_files,
     str_replace_editor,
 )
-from strix.tools.finish.finish_sdk_tool import finish_scan
-from strix.tools.load_skill.load_skill_sdk_tool import load_skill
-from strix.tools.notes.notes_sdk_tools import (
+from strix.tools.finish.tool import finish_scan
+from strix.tools.load_skill.tool import load_skill
+from strix.tools.notes.tools import (
     create_note,
     delete_note,
     get_note,
     list_notes,
     update_note,
 )
-from strix.tools.python.python_sdk_tool import python_action
-from strix.tools.reporting.reporting_sdk_tools import create_vulnerability_report
-from strix.tools.terminal.terminal_sdk_tool import terminal_execute
-from strix.tools.thinking.thinking_sdk_tools import think
-from strix.tools.todo.todo_sdk_tools import (
+from strix.tools.python.tool import python_action
+from strix.tools.reporting.tool import create_vulnerability_report
+from strix.tools.terminal.tool import terminal_execute
+from strix.tools.thinking.tool import think
+from strix.tools.todo.tools import (
     create_todo,
     delete_todo,
     list_todos,
@@ -74,7 +74,7 @@ from strix.tools.todo.todo_sdk_tools import (
     mark_todo_pending,
     update_todo,
 )
-from strix.tools.web_search.web_search_sdk_tool import web_search
+from strix.tools.web_search.tool import web_search
 
 
 logger = logging.getLogger(__name__)

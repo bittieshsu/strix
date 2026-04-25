@@ -11,9 +11,7 @@ Two helpers are exposed:
 - :func:`wait_for_http_ready` for the FastAPI tool server, whose
   ``/health`` endpoint returns ``{"status": "healthy"}`` once the
   process is up. We don't require the JSON shape exactly — any 2xx
-  is treated as ready, mirroring the legacy ``_wait_for_tool_server``
-  but more lenient (the legacy version checked the JSON body too,
-  which made test images without that handler fail spuriously).
+  is treated as ready.
 
 - :func:`wait_for_tcp_ready` for Caido, which serves an HTTP forward
   proxy on its port and does *not* expose ``/health``. A TCP connect
@@ -21,7 +19,6 @@ Two helpers are exposed:
 
 References:
     - PLAYBOOK.md §3.1
-    - HARNESS_WIKI.md §6.4 (legacy ``_wait_for_tool_server`` pattern)
 """
 
 from __future__ import annotations
@@ -40,9 +37,8 @@ class SandboxNotReadyError(Exception):
     """Raised when a sandbox port doesn't accept connections in time."""
 
 
-# Default per-attempt HTTP timeout. The legacy harness used 5s; we
-# match it so a slow first request (image still warming up) doesn't
-# misfire as a hard failure on a single attempt.
+# Default per-attempt HTTP timeout. 5s so a slow first request (image
+# still warming up) doesn't misfire as a hard failure on a single attempt.
 _DEFAULT_HTTP_PROBE_TIMEOUT = 5.0
 
 # Default polling cadence between attempts. Balanced for CI-style

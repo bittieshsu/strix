@@ -1,13 +1,16 @@
 import argparse
 import asyncio
 import atexit
+import contextlib
 import logging
+import os
 import signal
 import sys
 import threading
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 
@@ -28,13 +31,14 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Label, Static, TextArea, Tree
 from textual.widgets.tree import TreeNode
 
-from strix.agents.StrixAgent import StrixAgent
+from strix.config import Config
+from strix.entry import run_strix_scan
 from strix.interface.streaming_parser import parse_streaming_content
 from strix.interface.tool_components.agent_message_renderer import AgentMessageRenderer
 from strix.interface.tool_components.registry import get_tool_renderer
 from strix.interface.tool_components.user_message_renderer import UserMessageRenderer
 from strix.interface.utils import build_tui_stats_text
-from strix.llm.config import LLMConfig
+from strix.sandbox import session_manager
 from strix.telemetry.tracer import Tracer, set_global_tracer
 
 
@@ -329,7 +333,7 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
         else:
             return text
 
-    def _render_vulnerability(self) -> Text:  # noqa: PLR0912, PLR0915
+    def _render_vulnerability(self) -> Text:
         vuln = self.vulnerability
         text = Text()
 
@@ -455,7 +459,7 @@ class VulnerabilityDetailScreen(ModalScreen):  # type: ignore[misc]
 
         return text
 
-    def _get_markdown_report(self) -> str:  # noqa: PLR0912, PLR0915
+    def _get_markdown_report(self) -> str:
         """Get Markdown version of vulnerability report for clipboard."""
         vuln = self.vulnerability
         lines: list[str] = []
@@ -702,7 +706,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
         super().__init__()
         self.args = args
         self.scan_config = self._build_scan_config(args)
-        self.agent_config = self._build_agent_config(args)
 
         self.tracer = Tracer(self.scan_config["run_name"])
         self.tracer.set_scan_config(self.scan_config)
@@ -736,6 +739,18 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
         self._setup_cleanup_handlers()
 
+    def _resolve_sources_path(self) -> Path:
+        local_sources = getattr(self.args, "local_sources", None) or []
+        if local_sources:
+            first = local_sources[0]
+            host_path = first.get("host_path") or first.get("source_path") or first.get("path")
+            if host_path:
+                return Path(host_path).expanduser().resolve().parent
+        cache_root = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+        sources = Path(cache_root) / "strix" / "sources" / str(self.args.run_name)
+        sources.mkdir(parents=True, exist_ok=True)
+        return sources
+
     def _build_scan_config(self, args: argparse.Namespace) -> dict[str, Any]:
         return {
             "scan_id": args.run_name,
@@ -743,32 +758,13 @@ class StrixTUIApp(App):  # type: ignore[misc]
             "user_instructions": args.instruction or "",
             "run_name": args.run_name,
             "diff_scope": getattr(args, "diff_scope", {"active": False}),
+            "scan_mode": getattr(args, "scan_mode", "deep"),
+            "is_whitebox": bool(getattr(args, "local_sources", [])),
         }
-
-    def _build_agent_config(self, args: argparse.Namespace) -> dict[str, Any]:
-        scan_mode = getattr(args, "scan_mode", "deep")
-        llm_config = LLMConfig(
-            scan_mode=scan_mode,
-            interactive=True,
-            is_whitebox=bool(getattr(args, "local_sources", [])),
-        )
-
-        config = {
-            "llm_config": llm_config,
-            "max_iterations": 300,
-        }
-
-        if getattr(args, "local_sources", None):
-            config["local_sources"] = args.local_sources
-
-        return config
 
     def _setup_cleanup_handlers(self) -> None:
         def cleanup_on_exit() -> None:
-            from strix.runtime import cleanup_runtime
-
             self.tracer.cleanup()
-            cleanup_runtime()
 
         def signal_handler(_signum: int, _frame: Any) -> None:
             self.tracer.cleanup()
@@ -1305,7 +1301,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
         stats_content = Text()
 
-        stats_text = build_tui_stats_text(self.tracer, self.agent_config)
+        stats_text = build_tui_stats_text(self.tracer)
         if stats_text:
             stats_content.append(stats_text)
 
@@ -1502,10 +1498,19 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 asyncio.set_event_loop(loop)
 
                 try:
-                    agent = StrixAgent(self.agent_config)
-
                     if not self._scan_stop_event.is_set():
-                        loop.run_until_complete(agent.execute_scan(self.scan_config))
+                        image = Config.get("strix_image") or "strix-sandbox:latest"
+                        sources_path = self._resolve_sources_path()
+                        loop.run_until_complete(
+                            run_strix_scan(
+                                scan_config=self.scan_config,
+                                scan_id=self.scan_config["run_name"],
+                                image=str(image),
+                                sources_path=sources_path,
+                                tracer=self.tracer,
+                                interactive=True,
+                            ),
+                        )
 
                 except (KeyboardInterrupt, asyncio.CancelledError):
                     logging.info("Scan interrupted by user")
@@ -1516,6 +1521,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 except Exception:
                     logging.exception("Unexpected error during scan")
                 finally:
+                    # Best-effort sandbox teardown if early setup failed
+                    # before run_strix_scan's own ``finally`` ran.
+                    with contextlib.suppress(Exception):
+                        loop.run_until_complete(
+                            session_manager.cleanup(self.scan_config["run_name"]),
+                        )
                     loop.close()
                     self._scan_completed.set()
 
@@ -1816,15 +1827,9 @@ class StrixTUIApp(App):  # type: ignore[misc]
                     metadata={"interrupted": True},
                 )
 
-        try:
-            from strix.tools.agents_graph.agents_graph_actions import _agent_instances
-
-            if self.selected_agent_id in _agent_instances:
-                agent_instance = _agent_instances[self.selected_agent_id]
-                if hasattr(agent_instance, "cancel_current_execution"):
-                    agent_instance.cancel_current_execution()
-        except (ImportError, AttributeError, KeyError):
-            pass
+        # TODO: route user→agent messages through the AgentMessageBus
+        # once the TUI has a handle on it. The bus currently lives
+        # inside ``run_strix_scan`` scope only.
 
         if self.tracer:
             self.tracer.log_chat_message(
@@ -1833,15 +1838,11 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 agent_id=self.selected_agent_id,
             )
 
-        try:
-            from strix.tools.agents_graph.agents_graph_actions import send_user_message_to_agent
-
-            send_user_message_to_agent(self.selected_agent_id, message)
-
-        except (ImportError, AttributeError) as e:
-            import logging
-
-            logging.warning(f"Failed to send message to agent {self.selected_agent_id}: {e}")
+        logging.warning(
+            "User-message-to-agent dispatch is not wired post-migration; "
+            "message %r logged to tracer but not delivered.",
+            message,
+        )
 
         self._displayed_events.clear()
         self._update_chat_view()
@@ -1940,22 +1941,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
         return agent_name, False
 
     def action_confirm_stop_agent(self, agent_id: str) -> None:
-        try:
-            from strix.tools.agents_graph.agents_graph_actions import stop_agent
-
-            result = stop_agent(agent_id)
-
-            import logging
-
-            if result.get("success"):
-                logging.info(f"Stop request sent to agent: {result.get('message', 'Unknown')}")
-            else:
-                logging.warning(f"Failed to stop agent: {result.get('error', 'Unknown error')}")
-
-        except Exception:
-            import logging
-
-            logging.exception(f"Failed to stop agent {agent_id}")
+        # TODO: route to ``bus.cancel_descendants(agent_id)`` once the TUI
+        # has a handle on the AgentMessageBus.
+        logging.warning(
+            "Stop-agent dispatch is not wired post-migration; agent %s left running.",
+            agent_id,
+        )
 
     def action_custom_quit(self) -> None:
         if self._scan_thread and self._scan_thread.is_alive():
@@ -2071,7 +2062,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                     cleaned = self._clean_copied_text(selected)
                     self.copy_to_clipboard(cleaned if cleaned.strip() else selected)
                     copied = True
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("Failed to copy screen selection", exc_info=True)
 
         if not copied:
@@ -2082,7 +2073,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                     self.copy_to_clipboard(selected)
                     chat_input.move_cursor(chat_input.cursor_location)
                     copied = True
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.debug("Failed to copy chat input selection", exc_info=True)
 
         if copied:

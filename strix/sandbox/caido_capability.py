@@ -38,7 +38,7 @@ from agents.tool import Tool
 from pydantic import PrivateAttr
 
 from strix.sandbox.healthcheck import wait_for_http_ready, wait_for_tcp_ready
-from strix.tools.proxy.proxy_sdk_tools import (
+from strix.tools.proxy.tools import (
     list_requests,
     list_sitemap,
     repeat_request,
@@ -68,7 +68,7 @@ _CAIDO_INTERNAL_PORT = 48080
 _TOOL_SERVER_INTERNAL_PORT = 48081
 
 # Probe URLs used inside ``bind``. ``host=127.0.0.1`` because the host
-# port mapping is loopback-only (legacy and SDK both bind to 127.0.0.1).
+# port mapping is loopback-only.
 _PROBE_HOST = "127.0.0.1"
 
 

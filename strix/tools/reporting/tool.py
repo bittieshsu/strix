@@ -20,7 +20,7 @@ from typing import Any
 from agents import RunContextWrapper
 
 from strix.tools._decorator import strix_tool
-from strix.tools.reporting import reporting_actions as _legacy
+from strix.tools.reporting import reporting_actions as _impl
 
 
 def _dump(result: dict[str, Any]) -> str:
@@ -71,7 +71,7 @@ async def create_vulnerability_report(
     """
     return _dump(
         await asyncio.to_thread(
-            _legacy.create_vulnerability_report,
+            _impl.create_vulnerability_report,
             title=title,
             description=description,
             impact=impact,

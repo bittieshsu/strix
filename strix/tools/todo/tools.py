@@ -17,8 +17,8 @@ from typing import Any
 from agents import RunContextWrapper
 
 from strix.tools._decorator import strix_tool
-from strix.tools._legacy_adapter import adapter_from_ctx
-from strix.tools.todo import todo_actions as _legacy
+from strix.tools._state_adapter import adapter_from_ctx
+from strix.tools.todo import todo_actions as _impl
 
 
 def _dump(result: dict[str, Any]) -> str:
@@ -45,7 +45,7 @@ async def create_todo(
     """
     state = adapter_from_ctx(ctx)
     return _dump(
-        _legacy.create_todo(
+        _impl.create_todo(
             agent_state=state,
             title=title,
             description=description,
@@ -68,7 +68,7 @@ async def list_todos(
         priority: Optional ``"low" | "normal" | "high" | "critical"`` filter.
     """
     state = adapter_from_ctx(ctx)
-    return _dump(_legacy.list_todos(agent_state=state, status=status, priority=priority))
+    return _dump(_impl.list_todos(agent_state=state, status=status, priority=priority))
 
 
 @strix_tool(timeout=30)
@@ -91,7 +91,7 @@ async def update_todo(
     """
     state = adapter_from_ctx(ctx)
     return _dump(
-        _legacy.update_todo(
+        _impl.update_todo(
             agent_state=state,
             todo_id=todo_id,
             title=title,
@@ -112,7 +112,7 @@ async def mark_todo_done(
     """Mark one (``todo_id``) or many (``todo_ids``) todos as done."""
     state = adapter_from_ctx(ctx)
     return _dump(
-        _legacy.mark_todo_done(agent_state=state, todo_id=todo_id, todo_ids=todo_ids),
+        _impl.mark_todo_done(agent_state=state, todo_id=todo_id, todo_ids=todo_ids),
     )
 
 
@@ -125,7 +125,7 @@ async def mark_todo_pending(
     """Mark one (``todo_id``) or many (``todo_ids``) todos as pending."""
     state = adapter_from_ctx(ctx)
     return _dump(
-        _legacy.mark_todo_pending(
+        _impl.mark_todo_pending(
             agent_state=state,
             todo_id=todo_id,
             todo_ids=todo_ids,
@@ -142,5 +142,5 @@ async def delete_todo(
     """Delete one (``todo_id``) or many (``todo_ids``) todos."""
     state = adapter_from_ctx(ctx)
     return _dump(
-        _legacy.delete_todo(agent_state=state, todo_id=todo_id, todo_ids=todo_ids),
+        _impl.delete_todo(agent_state=state, todo_id=todo_id, todo_ids=todo_ids),
     )

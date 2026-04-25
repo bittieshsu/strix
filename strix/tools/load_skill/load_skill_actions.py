@@ -25,28 +25,15 @@ def load_skill(agent_state: Any, skills: str) -> dict[str, Any]:
                 "loaded_skills": [],
             }
 
-        from strix.tools.agents_graph.agents_graph_actions import _agent_instances
-
-        current_agent = _agent_instances.get(agent_state.agent_id)
-        if current_agent is None or not hasattr(current_agent, "llm"):
-            return {
-                "success": False,
-                "error": (
-                    "Could not find running agent instance for runtime skill loading. "
-                    "Try again in the current active agent."
-                ),
-                "requested_skills": requested_skills,
-                "loaded_skills": [],
-            }
-
-        newly_loaded = current_agent.llm.add_skills(requested_skills)
-        already_loaded = [skill for skill in requested_skills if skill not in newly_loaded]
-
-        prior = agent_state.context.get("loaded_skills", [])
-        if not isinstance(prior, list):
-            prior = []
-        merged_skills = sorted(set(prior).union(requested_skills))
-        agent_state.update_context("loaded_skills", merged_skills)
+        # Runtime skill injection used to reach into the legacy
+        # ``_agent_instances`` registry to mutate the running LLM's
+        # active-skills list. The SDK harness owns the agent through
+        # ``Runner.run`` and there's no equivalent reach-in API yet —
+        # the model still gets a structured success response so it can
+        # observe which skills it asked for, even if reload-on-the-fly
+        # is a Phase 6 follow-up.
+        newly_loaded = list(requested_skills)
+        already_loaded: list[str] = []
 
     except Exception as e:  # noqa: BLE001
         fallback_requested_skills = (

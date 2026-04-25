@@ -1,12 +1,10 @@
-"""inject_messages_filter — SDK call_model_input_filter for the message bus.
+"""inject_messages_filter — SDK ``call_model_input_filter`` for the message bus.
 
-This is the integration point that replaces Strix's per-iteration
-_check_agent_messages call (legacy: agents/base_agent.py:448-531). The SDK
-runs ``call_model_input_filter`` exactly once per turn before the LLM call
-(``run_internal/turn_preparation.py:55-80``), and captures the filter's
-output in a lambda closure for any subsequent retries
-(``run_internal/model_retry.py:34-35``) — so a single drain per turn does
-not lose messages on retry.
+The SDK runs ``call_model_input_filter`` exactly once per turn before
+the LLM call (``run_internal/turn_preparation.py:55-80``) and captures
+the filter's output in a lambda closure for any subsequent retries
+(``run_internal/model_retry.py:34-35``) — so a single drain per turn
+does not lose messages on retry.
 
 References:
     - PLAYBOOK.md §2.4
@@ -32,8 +30,7 @@ async def inject_messages_filter(data: CallModelData) -> ModelInputData:
     """Drain bus inbox and append messages as user-role items before the LLM call.
 
     Each drained message is wrapped in an ``<inter_agent_message>`` XML envelope
-    that mirrors Strix's legacy format (base_agent.py:491-514) so the system
-    prompt's existing rules around inter-agent communication still apply.
+    so the system prompt's rules around inter-agent communication apply.
 
     Messages from the literal sender ``"user"`` (a real human via TUI) skip
     the XML wrap and are added as plain user messages.

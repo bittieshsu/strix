@@ -1,8 +1,11 @@
 import atexit
+import contextlib
+import os
 import signal
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -10,16 +13,44 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
-from strix.agents.StrixAgent import StrixAgent
-from strix.interface.sdk_dispatch import run_scan_via_sdk, should_use_sdk_harness
-from strix.llm.config import LLMConfig
-from strix.runtime import cleanup_runtime
+from strix.config import Config
+from strix.entry import run_strix_scan
+from strix.sandbox import session_manager
 from strix.telemetry.tracer import Tracer, set_global_tracer
 
 from .utils import (
     build_live_stats_text,
     format_vulnerability_report,
 )
+
+
+def _resolve_sandbox_image() -> str:
+    image = Config.get("strix_image")
+    if not image:
+        raise RuntimeError(
+            "strix_image is not configured. Set it in ~/.strix/cli-config.json.",
+        )
+    return str(image)
+
+
+def _resolve_sources_path(args: Any) -> Path:
+    """Pick the host directory to mount into ``/workspace/sources``.
+
+    - With ``--local-sources``, mount the parent of the first source so
+      the agent can walk down into the actual tree.
+    - Otherwise, a per-run scratch dir under ``$XDG_CACHE_HOME/strix``.
+    """
+    local_sources: list[dict[str, str]] | None = getattr(args, "local_sources", None)
+    if local_sources:
+        first = local_sources[0]
+        host_path = first.get("host_path") or first.get("source_path") or first.get("path")
+        if host_path:
+            return Path(host_path).expanduser().resolve().parent
+
+    cache_root = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    sources = Path(cache_root) / "strix" / "sources" / str(args.run_name)
+    sources.mkdir(parents=True, exist_ok=True)
+    return sources
 
 
 async def run_cli(args: Any) -> None:  # noqa: PLR0915
@@ -68,26 +99,17 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     console.print()
 
     scan_mode = getattr(args, "scan_mode", "deep")
+    is_whitebox = bool(getattr(args, "local_sources", []))
 
-    scan_config = {
+    scan_config: dict[str, Any] = {
         "scan_id": args.run_name,
         "targets": args.targets_info,
         "user_instructions": args.instruction or "",
         "run_name": args.run_name,
         "diff_scope": getattr(args, "diff_scope", {"active": False}),
+        "scan_mode": scan_mode,
+        "is_whitebox": is_whitebox,
     }
-
-    llm_config = LLMConfig(
-        scan_mode=scan_mode,
-        is_whitebox=bool(getattr(args, "local_sources", [])),
-    )
-    agent_config = {
-        "llm_config": llm_config,
-        "max_iterations": 300,
-    }
-
-    if getattr(args, "local_sources", None):
-        agent_config["local_sources"] = args.local_sources
 
     tracer = Tracer(args.run_name)
     tracer.set_scan_config(scan_config)
@@ -112,7 +134,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
     def cleanup_on_exit() -> None:
         tracer.cleanup()
-        cleanup_runtime()
 
     def signal_handler(_signum: int, _frame: Any) -> None:
         tracer.cleanup()
@@ -131,7 +152,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         status_text.append("Penetration test in progress", style="bold #22c55e")
         status_text.append("\n\n")
 
-        stats_text = build_live_stats_text(tracer, agent_config)
+        stats_text = build_live_stats_text(tracer)
         if stats_text:
             status_text.append(stats_text)
 
@@ -156,39 +177,30 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
                     try:
                         live.update(create_live_status())
                         time.sleep(2)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         break
 
             update_thread = threading.Thread(target=update_status, daemon=True)
             update_thread.start()
 
             try:
-                if should_use_sdk_harness():
-                    # SDK harness opt-in (PLAYBOOK §7.1). Returns a
-                    # RunResult, not the legacy success-dict shape, so
-                    # we skip the legacy error-extraction block —
-                    # failures inside run_strix_scan raise instead.
-                    await run_scan_via_sdk(
-                        scan_config=scan_config,
-                        args=args,
-                        tracer=tracer,
-                    )
-                else:
-                    agent = StrixAgent(agent_config)
-                    result = await agent.execute_scan(scan_config)
-
-                    if isinstance(result, dict) and not result.get("success", True):
-                        error_msg = result.get("error", "Unknown error")
-                        error_details = result.get("details")
-                        console.print()
-                        console.print(f"[bold red]Penetration test failed:[/] {error_msg}")
-                        if error_details:
-                            console.print(f"[dim]{error_details}[/]")
-                        console.print()
-                        sys.exit(1)
+                await run_strix_scan(
+                    scan_config=scan_config,
+                    scan_id=args.run_name,
+                    image=_resolve_sandbox_image(),
+                    sources_path=_resolve_sources_path(args),
+                    tracer=tracer,
+                    interactive=bool(getattr(args, "interactive", False)),
+                )
             finally:
                 stop_updates.set()
                 update_thread.join(timeout=1)
+                # Best-effort: tear down the sandbox session even if the
+                # run raised. ``run_strix_scan`` already does this in its
+                # own ``finally``, but call here too in case the failure
+                # was during early setup.
+                with contextlib.suppress(Exception):
+                    await session_manager.cleanup(args.run_name)
 
     except Exception as e:
         console.print(f"[bold red]Error during penetration test:[/] {e}")

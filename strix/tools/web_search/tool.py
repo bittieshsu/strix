@@ -17,7 +17,7 @@ from typing import Any
 from agents import RunContextWrapper
 
 from strix.tools._decorator import strix_tool
-from strix.tools.web_search import web_search_actions as _legacy
+from strix.tools.web_search import web_search_actions as _impl
 
 
 def _dump(result: dict[str, Any]) -> str:
@@ -39,4 +39,4 @@ async def web_search(ctx: RunContextWrapper, query: str) -> str:
             system prompt to bias results toward CVEs, exploits, and Kali-
             compatible commands.
     """
-    return _dump(await asyncio.to_thread(_legacy.web_search, query=query))
+    return _dump(await asyncio.to_thread(_impl.web_search, query=query))

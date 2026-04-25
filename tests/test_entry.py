@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from strix.entry import _build_root_task, _build_scope_context, run_strix_scan
 from strix.orchestration.bus import AgentMessageBus
-from strix.sdk_entry import _build_root_task, _build_scope_context, run_strix_scan
 
 
 # --- helpers ------------------------------------------------------------
@@ -140,18 +140,18 @@ async def test_run_strix_scan_wires_context_and_calls_runner(tmp_path: Path) -> 
 
     with (
         patch(
-            "strix.sdk_entry.session_manager.create_or_reuse",
+            "strix.entry.session_manager.create_or_reuse",
             new=AsyncMock(return_value=bundle),
         ) as create_mock,
         patch(
-            "strix.sdk_entry.session_manager.cleanup",
+            "strix.entry.session_manager.cleanup",
             new=AsyncMock(),
         ) as cleanup_mock,
-        patch("strix.sdk_entry.Runner.run", side_effect=fake_runner_run) as runner_mock,
+        patch("strix.entry.Runner.run", side_effect=fake_runner_run) as runner_mock,
         # Stub the factory to avoid rendering the 158k-char prompt for
         # every test (it's covered by sdk_prompt tests).
         patch(
-            "strix.sdk_entry.build_strix_agent",
+            "strix.entry.build_strix_agent",
             return_value=MagicMock(name="root_agent"),
         ) as factory_mock,
     ):
@@ -200,18 +200,18 @@ async def test_run_strix_scan_cleans_up_on_runner_failure(tmp_path: Path) -> Non
 
     with (
         patch(
-            "strix.sdk_entry.session_manager.create_or_reuse",
+            "strix.entry.session_manager.create_or_reuse",
             new=AsyncMock(return_value=bundle),
         ),
         patch(
-            "strix.sdk_entry.session_manager.cleanup",
+            "strix.entry.session_manager.cleanup",
             new=AsyncMock(),
         ) as cleanup_mock,
         patch(
-            "strix.sdk_entry.Runner.run",
+            "strix.entry.Runner.run",
             side_effect=RuntimeError("simulated LLM blow-up"),
         ),
-        patch("strix.sdk_entry.build_strix_agent", return_value=MagicMock()),
+        patch("strix.entry.build_strix_agent", return_value=MagicMock()),
         pytest.raises(RuntimeError, match="simulated LLM"),
     ):
         await run_strix_scan(
@@ -233,15 +233,15 @@ async def test_run_strix_scan_skips_cleanup_when_disabled(tmp_path: Path) -> Non
 
     with (
         patch(
-            "strix.sdk_entry.session_manager.create_or_reuse",
+            "strix.entry.session_manager.create_or_reuse",
             new=AsyncMock(return_value=bundle),
         ),
         patch(
-            "strix.sdk_entry.session_manager.cleanup",
+            "strix.entry.session_manager.cleanup",
             new=AsyncMock(),
         ) as cleanup_mock,
-        patch("strix.sdk_entry.Runner.run", side_effect=fake_runner_run),
-        patch("strix.sdk_entry.build_strix_agent", return_value=MagicMock()),
+        patch("strix.entry.Runner.run", side_effect=fake_runner_run),
+        patch("strix.entry.build_strix_agent", return_value=MagicMock()),
     ):
         await run_strix_scan(
             scan_config=_scan_config(),
@@ -267,12 +267,12 @@ async def test_run_strix_scan_auto_generates_scan_id(tmp_path: Path) -> None:
 
     with (
         patch(
-            "strix.sdk_entry.session_manager.create_or_reuse",
+            "strix.entry.session_manager.create_or_reuse",
             new=AsyncMock(side_effect=fake_create),
         ),
-        patch("strix.sdk_entry.session_manager.cleanup", new=AsyncMock()),
-        patch("strix.sdk_entry.Runner.run", new=AsyncMock(return_value=MagicMock())),
-        patch("strix.sdk_entry.build_strix_agent", return_value=MagicMock()),
+        patch("strix.entry.session_manager.cleanup", new=AsyncMock()),
+        patch("strix.entry.Runner.run", new=AsyncMock(return_value=MagicMock())),
+        patch("strix.entry.build_strix_agent", return_value=MagicMock()),
     ):
         await run_strix_scan(
             scan_config=_scan_config(),
@@ -300,12 +300,12 @@ async def test_run_strix_scan_passes_scan_level_config_into_factory(
 
     with (
         patch(
-            "strix.sdk_entry.session_manager.create_or_reuse",
+            "strix.entry.session_manager.create_or_reuse",
             new=AsyncMock(return_value=bundle),
         ),
-        patch("strix.sdk_entry.session_manager.cleanup", new=AsyncMock()),
-        patch("strix.sdk_entry.Runner.run", new=AsyncMock(return_value=MagicMock())),
-        patch("strix.sdk_entry.build_strix_agent", side_effect=fake_factory),
+        patch("strix.entry.session_manager.cleanup", new=AsyncMock()),
+        patch("strix.entry.Runner.run", new=AsyncMock(return_value=MagicMock())),
+        patch("strix.entry.build_strix_agent", side_effect=fake_factory),
     ):
         await run_strix_scan(
             scan_config=_scan_config(scan_mode="fast", is_whitebox=True),

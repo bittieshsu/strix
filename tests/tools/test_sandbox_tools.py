@@ -27,8 +27,8 @@ from unittest.mock import patch
 import pytest
 from agents.tool import FunctionTool
 
-from strix.tools.browser.browser_sdk_tool import browser_action
-from strix.tools.proxy.proxy_sdk_tools import (
+from strix.tools.browser.tool import browser_action
+from strix.tools.proxy.tools import (
     list_requests,
     list_sitemap,
     repeat_request,
@@ -37,8 +37,8 @@ from strix.tools.proxy.proxy_sdk_tools import (
     view_request,
     view_sitemap_entry,
 )
-from strix.tools.python.python_sdk_tool import python_action
-from strix.tools.terminal.terminal_sdk_tool import terminal_execute
+from strix.tools.python.tool import python_action
+from strix.tools.terminal.tool import terminal_execute
 
 
 _ALL_SANDBOX_TOOLS = (
@@ -119,7 +119,7 @@ async def test_browser_action_dispatches_full_payload() -> None:
     (the in-container handler distinguishes ``None`` from missing)."""
     fake = {"result": {"screenshot": "data:image/png;base64,..."}}
     with patch(
-        "strix.tools.browser.browser_sdk_tool.post_to_sandbox",
+        "strix.tools.browser.tool.post_to_sandbox",
         return_value=fake,
     ) as dispatch:
         out = await _invoke(
@@ -158,7 +158,7 @@ async def test_browser_action_dispatches_full_payload() -> None:
 async def test_terminal_execute_dispatches() -> None:
     fake = {"result": {"content": "hello\n", "exit_code": 0}}
     with patch(
-        "strix.tools.terminal.terminal_sdk_tool.post_to_sandbox",
+        "strix.tools.terminal.tool.post_to_sandbox",
         return_value=fake,
     ) as dispatch:
         out = await _invoke(
@@ -185,7 +185,7 @@ async def test_terminal_execute_dispatches() -> None:
 async def test_python_action_dispatches() -> None:
     fake = {"result": {"stdout": "42\n", "is_running": False}}
     with patch(
-        "strix.tools.python.python_sdk_tool.post_to_sandbox",
+        "strix.tools.python.tool.post_to_sandbox",
         return_value=fake,
     ) as dispatch:
         out = await _invoke(
@@ -214,7 +214,7 @@ async def test_python_action_dispatches() -> None:
 async def test_list_requests_forwards_full_query() -> None:
     fake: dict[str, Any] = {"result": {"requests": []}}
     with patch(
-        "strix.tools.proxy.proxy_sdk_tools.post_to_sandbox",
+        "strix.tools.proxy.tools.post_to_sandbox",
         return_value=fake,
     ) as dispatch:
         await _invoke(
@@ -241,7 +241,7 @@ async def test_list_requests_forwards_full_query() -> None:
 async def test_view_request_dispatches() -> None:
     fake = {"result": {"raw": "GET / HTTP/1.1..."}}
     with patch(
-        "strix.tools.proxy.proxy_sdk_tools.post_to_sandbox",
+        "strix.tools.proxy.tools.post_to_sandbox",
         return_value=fake,
     ) as dispatch:
         await _invoke(
@@ -264,7 +264,7 @@ async def test_send_request_normalizes_missing_headers() -> None:
     """Legacy schema treats omitted ``headers`` as ``{}``; the wrapper must too."""
     fake = {"result": {"status": 200}}
     with patch(
-        "strix.tools.proxy.proxy_sdk_tools.post_to_sandbox",
+        "strix.tools.proxy.tools.post_to_sandbox",
         return_value=fake,
     ) as dispatch:
         await _invoke(
@@ -286,7 +286,7 @@ async def test_send_request_normalizes_missing_headers() -> None:
 async def test_repeat_request_normalizes_missing_modifications() -> None:
     fake = {"result": {"status": 200}}
     with patch(
-        "strix.tools.proxy.proxy_sdk_tools.post_to_sandbox",
+        "strix.tools.proxy.tools.post_to_sandbox",
         return_value=fake,
     ) as dispatch:
         await _invoke(repeat_request, _ctx_for(), request_id="req-1")
@@ -300,7 +300,7 @@ async def test_repeat_request_normalizes_missing_modifications() -> None:
 async def test_scope_rules_dispatches() -> None:
     fake = {"result": {"scope_id": "s-1"}}
     with patch(
-        "strix.tools.proxy.proxy_sdk_tools.post_to_sandbox",
+        "strix.tools.proxy.tools.post_to_sandbox",
         return_value=fake,
     ) as dispatch:
         await _invoke(
@@ -323,7 +323,7 @@ async def test_scope_rules_dispatches() -> None:
 async def test_list_sitemap_defaults() -> None:
     fake: dict[str, Any] = {"result": {"entries": []}}
     with patch(
-        "strix.tools.proxy.proxy_sdk_tools.post_to_sandbox",
+        "strix.tools.proxy.tools.post_to_sandbox",
         return_value=fake,
     ) as dispatch:
         await _invoke(list_sitemap, _ctx_for())
@@ -338,7 +338,7 @@ async def test_list_sitemap_defaults() -> None:
 async def test_view_sitemap_entry_dispatches() -> None:
     fake = {"result": {"entry_id": "e-1"}}
     with patch(
-        "strix.tools.proxy.proxy_sdk_tools.post_to_sandbox",
+        "strix.tools.proxy.tools.post_to_sandbox",
         return_value=fake,
     ) as dispatch:
         await _invoke(view_sitemap_entry, _ctx_for(), entry_id="e-1")

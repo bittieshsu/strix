@@ -63,6 +63,26 @@ class Tracer:
         self.vulnerability_reports: list[dict[str, Any]] = []
         self.final_scan_result: str | None = None
 
+        # LLM usage roll-up. Two buckets: ``live`` (active agents) and
+        # ``completed`` (finalized agents — moved here on on_agent_end).
+        # The orchestration hook chain feeds both via ``record_llm_usage``.
+        self._llm_stats: dict[str, dict[str, Any]] = {
+            "live": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_tokens": 0,
+                "cost": 0.0,
+                "requests": 0,
+            },
+            "completed": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_tokens": 0,
+                "cost": 0.0,
+                "requests": 0,
+            },
+        }
+
         self.scan_results: dict[str, Any] | None = None
         self.scan_config: dict[str, Any] | None = None
         self.run_metadata: dict[str, Any] = {
@@ -305,7 +325,7 @@ class Tracer:
 
         return self._run_dir
 
-    def add_vulnerability_report(  # noqa: PLR0912
+    def add_vulnerability_report(
         self,
         title: str,
         severity: str,
@@ -799,39 +819,65 @@ class Tracer:
         )
 
     def get_total_llm_stats(self) -> dict[str, Any]:
-        from strix.tools.agents_graph.agents_graph_actions import (
-            _agent_instances,
-            _completed_agent_llm_totals,
-            _agent_llm_stats_lock,
-        )
+        """Aggregate LLM stats across the live + completed agents.
 
-        with _agent_llm_stats_lock:
-            completed_totals = dict(_completed_agent_llm_totals)
-            active_agents = list(_agent_instances.values())
+        Reads ``self._llm_stats`` which the orchestration hooks update
+        per turn via :meth:`record_llm_usage`. The legacy reach-into-
+        ``agents_graph_actions`` globals is gone.
+        """
+        completed = self._llm_stats.get("completed", {}) or {}
+        live = self._llm_stats.get("live", {}) or {}
 
         total_stats = {
-            "input_tokens": int(completed_totals.get("input_tokens", 0) or 0),
-            "output_tokens": int(completed_totals.get("output_tokens", 0) or 0),
-            "cached_tokens": int(completed_totals.get("cached_tokens", 0) or 0),
-            "cost": float(completed_totals.get("cost", 0.0) or 0.0),
-            "requests": int(completed_totals.get("requests", 0) or 0),
+            "input_tokens": int(completed.get("input_tokens", 0))
+            + int(live.get("input_tokens", 0)),
+            "output_tokens": int(completed.get("output_tokens", 0))
+            + int(live.get("output_tokens", 0)),
+            "cached_tokens": int(completed.get("cached_tokens", 0))
+            + int(live.get("cached_tokens", 0)),
+            "cost": round(
+                float(completed.get("cost", 0.0)) + float(live.get("cost", 0.0)),
+                4,
+            ),
+            "requests": int(completed.get("requests", 0)) + int(live.get("requests", 0)),
         }
-
-        for agent_instance in active_agents:
-            if hasattr(agent_instance, "llm") and hasattr(agent_instance.llm, "_total_stats"):
-                agent_stats = agent_instance.llm._total_stats
-                total_stats["input_tokens"] += agent_stats.input_tokens
-                total_stats["output_tokens"] += agent_stats.output_tokens
-                total_stats["cached_tokens"] += agent_stats.cached_tokens
-                total_stats["cost"] += agent_stats.cost
-                total_stats["requests"] += agent_stats.requests
-
-        total_stats["cost"] = round(total_stats["cost"], 4)
-
         return {
             "total": total_stats,
             "total_tokens": total_stats["input_tokens"] + total_stats["output_tokens"],
         }
+
+    def record_llm_usage(
+        self,
+        *,
+        agent_id: str,  # noqa: ARG002
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cached_tokens: int = 0,
+        cost: float = 0.0,
+        requests: int = 1,
+        bucket: str = "live",
+    ) -> None:
+        """Accumulate LLM usage. Called by the orchestration hooks.
+
+        ``bucket`` is ``"live"`` for in-flight agents and ``"completed"``
+        for finalized ones — the SDK's on_agent_end hook moves a child's
+        running totals from live to completed when it terminates.
+        """
+        target = self._llm_stats.setdefault(
+            bucket,
+            {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_tokens": 0,
+                "cost": 0.0,
+                "requests": 0,
+            },
+        )
+        target["input_tokens"] += input_tokens
+        target["output_tokens"] += output_tokens
+        target["cached_tokens"] += cached_tokens
+        target["cost"] += cost
+        target["requests"] += requests
 
     def update_streaming_content(self, agent_id: str, content: str) -> None:
         self.streaming_content[agent_id] = content

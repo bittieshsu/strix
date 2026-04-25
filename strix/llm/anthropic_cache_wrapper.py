@@ -28,8 +28,8 @@ class AnthropicCachingLitellmModel(LitellmModel):
     """LitellmModel that injects ``cache_control: {"type": "ephemeral"}`` on the
     system message for Anthropic models. Other providers pass through unchanged.
 
-    Detection follows the legacy Strix logic: case-insensitive substring match
-    on ``"anthropic/"`` or ``"claude"`` against the model name (llm/llm.py:338-341).
+    Detection: case-insensitive substring match on ``"anthropic/"`` or
+    ``"claude"`` against the model name.
 
     For Strix proxy routing where the API model is ``openai/<base>`` but the
     underlying provider is still Anthropic (e.g., ``strix/claude-sonnet-4.6``

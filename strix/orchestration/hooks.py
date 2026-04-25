@@ -28,9 +28,8 @@ class StrixOrchestrationHooks(RunHooks[Any]):
     Wires four concerns:
 
     1. Turn-budget warnings injected into ``input_items`` at 85% and ``N - 3``
-       of ``max_turns`` (legacy: ``base_agent.py:186-211``).
-    2. LLM usage recording into the bus (replaces legacy ``LLM._total_stats``
-       + ``_completed_agent_llm_totals``).
+       of ``max_turns``.
+    2. LLM usage recording into the bus.
     3. Sandbox readiness: awaits the ``CaidoCapability._healthcheck_task``
        on first agent start so the agent doesn't fire tools before Caido and
        the tool server are ready.

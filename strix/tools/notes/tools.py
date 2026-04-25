@@ -17,7 +17,7 @@ from typing import Any
 from agents import RunContextWrapper
 
 from strix.tools._decorator import strix_tool
-from strix.tools.notes import notes_actions as _legacy
+from strix.tools.notes import notes_actions as _impl
 
 
 def _dump(result: dict[str, Any]) -> str:
@@ -48,7 +48,7 @@ async def create_note(
     # Wrap in to_thread so we don't block the event loop while waiting
     # on the lock or fsync.
     result = await asyncio.to_thread(
-        _legacy.create_note,
+        _impl.create_note,
         title=title,
         content=content,
         category=category,
@@ -75,7 +75,7 @@ async def list_notes(
             when True, full content is included.
     """
     result = await asyncio.to_thread(
-        _legacy.list_notes,
+        _impl.list_notes,
         category=category,
         tags=tags,
         search=search,
@@ -87,7 +87,7 @@ async def list_notes(
 @strix_tool(timeout=30)
 async def get_note(ctx: RunContextWrapper, note_id: str) -> str:
     """Fetch one note by its 5-char ID. Returns full content."""
-    result = await asyncio.to_thread(_legacy.get_note, note_id=note_id)
+    result = await asyncio.to_thread(_impl.get_note, note_id=note_id)
     return _dump(result)
 
 
@@ -101,7 +101,7 @@ async def update_note(
 ) -> str:
     """Update a note's title, content, or tags. Pass ``None`` to leave a field unchanged."""
     result = await asyncio.to_thread(
-        _legacy.update_note,
+        _impl.update_note,
         note_id=note_id,
         title=title,
         content=content,
@@ -113,5 +113,5 @@ async def update_note(
 @strix_tool(timeout=30)
 async def delete_note(ctx: RunContextWrapper, note_id: str) -> str:
     """Delete a note. For wiki notes, also removes the rendered Markdown file."""
-    result = await asyncio.to_thread(_legacy.delete_note, note_id=note_id)
+    result = await asyncio.to_thread(_impl.delete_note, note_id=note_id)
     return _dump(result)

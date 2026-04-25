@@ -20,16 +20,16 @@ from unittest.mock import patch
 import pytest
 from agents.tool import FunctionTool
 
-from strix.tools.notes import notes_actions as _notes_legacy
-from strix.tools.notes.notes_sdk_tools import (
+from strix.tools.notes import notes_actions as _notes_impl
+from strix.tools.notes.tools import (
     create_note,
     delete_note,
     get_note,
     list_notes,
     update_note,
 )
-from strix.tools.thinking.thinking_sdk_tools import think
-from strix.tools.todo.todo_sdk_tools import (
+from strix.tools.thinking.tool import think
+from strix.tools.todo.tools import (
     create_todo,
     delete_todo,
     list_todos,
@@ -190,10 +190,10 @@ def notes_run_dir(tmp_path: Path) -> Iterator[Path]:
     """Point the legacy notes module at a fresh run dir per test."""
     run_dir = tmp_path / "strix_runs" / "test"
     run_dir.mkdir(parents=True)
-    _notes_legacy._notes_storage.clear()
-    _notes_legacy._loaded_notes_run_dir = None
+    _notes_impl._notes_storage.clear()
+    _notes_impl._loaded_notes_run_dir = None
 
-    with patch.object(_notes_legacy, "_get_run_dir", return_value=run_dir):
+    with patch.object(_notes_impl, "_get_run_dir", return_value=run_dir):
         yield run_dir
 
 
