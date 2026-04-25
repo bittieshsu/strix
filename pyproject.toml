@@ -249,9 +249,6 @@ ignore = [
 "strix/tools/proxy/tools.py" = ["TC002"]
 "strix/tools/agents_graph/tools.py" = ["TC002"]
 "strix/agents/factory.py" = ["TC002"]
-# CaidoCapability uses agents.tool.Tool at runtime — pydantic Field
-# annotations and the cached _CAIDO_TOOLS tuple need it eagerly.
-"strix/sandbox/caido_capability.py" = ["TC002"]
 # Entry point: ``Path`` is used at runtime by the typing of the
 # session_manager call; importing under TYPE_CHECKING would defer
 # resolution past where mypy needs it. ``_build_root_task`` legitimately

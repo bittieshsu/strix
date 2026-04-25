@@ -17,16 +17,13 @@ logger = logging.getLogger(__name__)
 class StrixOrchestrationHooks(RunHooks[Any]):
     """Lifecycle hooks for Strix multi-agent runs.
 
-    Wires four concerns:
+    Wires three concerns:
 
     1. Turn-budget warnings injected into ``input_items`` at 85% and
        ``N - 3`` of ``max_turns``.
-    2. LLM usage recording into the bus + tracer.
-    3. Sandbox readiness: awaits the
-       ``CaidoCapability._healthcheck_task`` on first agent start so
-       the agent doesn't fire tools before Caido and the tool server
-       are ready.
-    4. Subagent crash detection: if ``on_agent_end`` fires without
+    2. LLM usage recording into the bus + tracer, plus mirroring the
+       bus's agent tree into ``tracer.agents`` for the TUI.
+    3. Subagent crash detection: if ``on_agent_end`` fires without
        ``agent_finish_called`` being set, posts a crash message to the
        parent's inbox so the parent learns on its next turn instead of
        waiting forever.
@@ -106,26 +103,14 @@ class StrixOrchestrationHooks(RunHooks[Any]):
         context: AgentHookContext[Any],
         agent: Any,
     ) -> None:
-        # Two concerns wired together because they fire at the same
-        # moment in the lifecycle:
-        #
-        # 1. CaidoCapability is bound to the sandbox session, not the
-        #    Agent (we use plain ``Agent``, not ``SandboxAgent``), so
-        #    the healthcheck task gets stashed in the context dict at
-        #    scan bring-up and we await it on first agent start.
-        # 2. The TUI reads ``tracer.agents`` to render the agent tree.
-        #    We mirror the bus state into the tracer here so the tree
-        #    actually shows live and historical agents.
+        # The TUI reads ``tracer.agents`` to render the agent tree;
+        # mirror the bus state into the tracer here so the tree
+        # populates as agents come online.
         del agent
         try:
             ctx = context.context
             if not isinstance(ctx, dict):
                 return
-            cap = ctx.get("caido_capability")
-            task = getattr(cap, "_healthcheck_task", None)
-            if task is not None:
-                await task
-
             tracer = ctx.get("tracer")
             bus = ctx.get("bus")
             me = ctx.get("agent_id")

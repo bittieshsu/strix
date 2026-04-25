@@ -27,7 +27,6 @@ from agents.sandbox.manifest import Environment, Manifest
 from agents.sandbox.sandboxes.docker import DockerSandboxClientOptions
 
 from strix.runtime.strix_docker_client import StrixDockerSandboxClient
-from strix.sandbox.caido_capability import CaidoCapability
 
 
 if TYPE_CHECKING:
@@ -86,8 +85,7 @@ async def create_or_reuse(
             Defaults to 120s, matching the legacy harness.
 
     Returns the bundle dict containing ``client``, ``session``,
-    ``tool_server_host_port``, ``caido_host_port``, ``bearer``,
-    and ``capability`` (the live CaidoCapability instance).
+    ``tool_server_host_port``, ``caido_host_port``, and ``bearer``.
     """
     cached = _SESSION_CACHE.get(scan_id)
     if cached is not None:
@@ -96,9 +94,11 @@ async def create_or_reuse(
 
     bearer = secrets.token_urlsafe(32)
 
-    capability = CaidoCapability()
-    # ``Manifest.environment`` is an ``Environment`` model — a bare dict
-    # is silently dropped by Pydantic, so wrap explicitly.
+    # Caido runs as an in-container sidecar on _CONTAINER_CAIDO_PORT and
+    # all HTTP(S) traffic from shelled-out tools (curl, Python requests,
+    # etc.) needs to flow through it — set the conventional env vars so
+    # standard libraries pick them up automatically.
+    caido_proxy_url = f"http://127.0.0.1:{_CONTAINER_CAIDO_PORT}"
     manifest = Manifest(
         entries={"sources": LocalDir(src=sources_path)},
         environment=Environment(
@@ -109,6 +109,9 @@ async def create_or_reuse(
                 "STRIX_SANDBOX_EXECUTION_TIMEOUT": str(execution_timeout),
                 "PYTHONUNBUFFERED": "1",
                 "HOST_GATEWAY": "host.docker.internal",
+                "http_proxy": caido_proxy_url,
+                "https_proxy": caido_proxy_url,
+                "ALL_PROXY": caido_proxy_url,
             },
         ),
     )
@@ -130,26 +133,14 @@ async def create_or_reuse(
     )
     session = await client.create(options=options, manifest=manifest)
 
-    # Resolve the host-side mapped ports the SDK assigned. The capability
-    # needs these *before* it binds, so its healthcheck task probes the
-    # right ports.
     tool_server_endpoint = await session._resolve_exposed_port(
         _CONTAINER_TOOL_SERVER_PORT,
     )
     caido_endpoint = await session._resolve_exposed_port(_CONTAINER_CAIDO_PORT)
 
-    capability.configure_host_ports(
-        tool_server_host_port=tool_server_endpoint.port,
-        caido_host_port=caido_endpoint.port,
-    )
-    # Bind the capability against the live session — this schedules the
-    # healthcheck task that on_agent_start awaits.
-    capability.bind(session)
-
     bundle = {
         "client": client,
         "session": session,
-        "capability": capability,
         "tool_server_host_port": tool_server_endpoint.port,
         "caido_host_port": caido_endpoint.port,
         "bearer": bearer,
@@ -170,12 +161,6 @@ async def cleanup(scan_id: str) -> None:
     if bundle is None:
         logger.debug("cleanup(%s): no cached session", scan_id)
         return
-
-    capability = bundle.get("capability")
-    if isinstance(capability, CaidoCapability):
-        task = capability._healthcheck_task
-        if task is not None and not task.done():
-            task.cancel()
 
     try:
         await bundle["client"].delete(bundle["session"])

@@ -1,8 +1,7 @@
 """``build_strix_agent`` — assemble an ``agents.Agent`` for root or child.
 
-Wires the SDK function tools, multi-agent graph tools,
-``CaidoCapability``, and the rendered Jinja prompt into one
-``agents.Agent`` ready for ``Runner.run``.
+Wires the SDK function tools, multi-agent graph tools, and the rendered
+Jinja prompt into one ``agents.Agent`` ready for ``Runner.run``.
 
 Two flavors:
 
@@ -13,9 +12,8 @@ Two flavors:
   there — without ``stop_at_tool_names`` the SDK loop would keep
   running to ``max_turns`` even after the child reported back.
 
-Caido tools come from ``CaidoCapability.tools()`` via the SDK's
-capability merge — we don't list them here. Skills are baked into the
-system prompt at scan bring-up; there's no runtime skill-loading tool.
+Skills are baked into the system prompt at scan bring-up; there's no
+runtime skill-loading tool.
 """
 
 from __future__ import annotations
@@ -50,6 +48,15 @@ from strix.tools.notes.tools import (
     list_notes,
     update_note,
 )
+from strix.tools.proxy.tools import (
+    list_requests,
+    list_sitemap,
+    repeat_request,
+    scope_rules,
+    send_request,
+    view_request,
+    view_sitemap_entry,
+)
 from strix.tools.python.tool import python_action
 from strix.tools.reporting.tool import create_vulnerability_report
 from strix.tools.terminal.tool import terminal_execute
@@ -68,9 +75,7 @@ from strix.tools.web_search.tool import web_search
 logger = logging.getLogger(__name__)
 
 
-# Tools every Strix agent has, root or child. The Caido proxy tools
-# (list_requests, view_request, send_request, ...) are NOT here —
-# CaidoCapability.tools() returns them and the SDK merges them in.
+# Tools every Strix agent has, root or child.
 _BASE_TOOLS: tuple[Tool, ...] = (
     # Thinking + planning
     think,
@@ -101,6 +106,14 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     browser_action,
     terminal_execute,
     python_action,
+    # Caido HTTP/HTTPS proxy
+    list_requests,
+    view_request,
+    send_request,
+    repeat_request,
+    scope_rules,
+    list_sitemap,
+    view_sitemap_entry,
     # Multi-agent graph tools (the bus is in ctx.context)
     view_agent_graph,
     agent_status,
