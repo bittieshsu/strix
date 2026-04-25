@@ -12,14 +12,7 @@ RUN useradd -m -s /bin/bash pentester && \
     echo "pentester ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     touch /home/pentester/.hushlogin
 
-RUN mkdir -p /home/pentester/configs \
-             /home/pentester/wordlists \
-             /home/pentester/output \
-             /home/pentester/scripts \
-             /home/pentester/tools \
-             /app/runtime \
-             /app/tools \
-             /app/certs && \
+RUN mkdir -p /home/pentester/tools /app/certs && \
     chown -R pentester:pentester /app/certs /home/pentester/tools
 
 RUN apt-get update && \
@@ -39,9 +32,6 @@ RUN apt-get update && \
     nodejs npm pipx \
     libcap2-bin \
     gdb \
-    libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libatspi2.0-0 \
-    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libasound2t64 \
-    fonts-unifont fonts-noto-color-emoji fonts-freefont-ttf fonts-dejavu-core ttf-bitstream-vera \
     libnss3-tools
 
 
