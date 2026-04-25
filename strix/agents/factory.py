@@ -1,33 +1,21 @@
-"""build_strix_agent — assemble an ``agents.Agent`` for root or child runs.
+"""``build_strix_agent`` — assemble an ``agents.Agent`` for root or child.
 
-This is the keystone that links Phase 2's SDK function tools, Phase 3's
-graph tools, Phase 4's CaidoCapability, and the rendered Jinja prompt
-from :mod:`strix.agents.prompt` into a single ``agents.Agent``
-instance ready for ``Runner.run``.
+Wires the SDK function tools, multi-agent graph tools,
+``CaidoCapability``, and the rendered Jinja prompt into one
+``agents.Agent`` ready for ``Runner.run``.
 
 Two flavors:
 
-- **Root** (``is_root=True``): the top-level scan agent. Carries
-  ``finish_scan`` (terminates the scan), no ``agent_finish`` (that's
-  for subagents). ``tool_use_behavior`` stops on ``finish_scan`` so
-  the model can't accidentally keep talking after marking the scan
-  complete.
-
+- **Root** (``is_root=True``): top-level scan agent. Carries
+  ``finish_scan`` and stops there.
 - **Child** (``is_root=False``): subagents spawned by the
-  ``create_agent`` graph tool. Carries ``agent_finish``, no
-  ``finish_scan``. ``tool_use_behavior`` stops on ``agent_finish``
-  (C4 — without this, the SDK loop would keep going to ``max_turns``
-  even after the child reported back to its parent).
+  ``create_agent`` graph tool. Carries ``agent_finish`` and stops
+  there — without ``stop_at_tool_names`` the SDK loop would keep
+  running to ``max_turns`` even after the child reported back.
 
-Caido tools come from ``CaidoCapability.tools()`` automatically via
-the SDK's capability merge — we don't include them here. Skills are
-injected via the prompt at scan-bring-up time; runtime skill loading
-isn't exposed as a tool any more (the legacy implementation reached
-into a global agent registry that no longer exists).
-
-References:
-    - PLAYBOOK.md §4.3 (graph tool wiring)
-    - AUDIT.md §2.4 (C4 — stop_at_tool_names is required for subagents)
+Caido tools come from ``CaidoCapability.tools()`` via the SDK's
+capability merge — we don't list them here. Skills are baked into the
+system prompt at scan bring-up; there's no runtime skill-loading tool.
 """
 
 from __future__ import annotations
@@ -196,12 +184,12 @@ def make_child_factory(
 ) -> Any:
     """Return a callable suitable for ``ctx.context['agent_factory']``.
 
-    The Phase 3 ``create_agent`` graph tool reads
+    The ``create_agent`` graph tool reads
     ``ctx.context['agent_factory']`` and calls it with ``name=`` and
-    ``skills=`` to build a child Agent. We snapshot the run-level
-    arguments (scan_mode, is_whitebox, etc.) into a closure so each
-    child inherits the right scan-level configuration without the
-    create_agent tool having to know about them.
+    ``skills=`` to build a child ``Agent``. Run-level arguments
+    (``scan_mode``, ``is_whitebox``, etc.) are captured in a closure so
+    each child inherits the scan-level configuration without
+    ``create_agent`` having to know about them.
     """
 
     def _factory(*, name: str, skills: list[str]) -> Agent[Any]:

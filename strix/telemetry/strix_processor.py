@@ -1,14 +1,8 @@
-"""StrixTracingProcessor — SDK trace processor that writes events.jsonl.
+"""``StrixTracingProcessor`` — SDK trace processor that writes ``events.jsonl``.
 
 Hooks into the SDK's tracing pipeline and writes events to
-``strix_runs/<run-name>/events.jsonl``. PII scrubbing via the existing
-``TelemetrySanitizer``.
-
-References:
-    - PLAYBOOK.md §2.9
-    - AUDIT_R2.md §1.2 (C7 — JSONL writes must be lock-protected)
-    - AUDIT_R3.md C16 (writes must catch OSError; never tear down the run)
-    - AUDIT_R3.md F3 (every TracingProcessor hook is SYNC, not async)
+``strix_runs/<run-name>/events.jsonl``. PII scrubbing runs through
+:class:`TelemetrySanitizer`.
 """
 
 from __future__ import annotations
@@ -47,17 +41,11 @@ def _lock_for(path: Path) -> threading.Lock:
 class StrixTracingProcessor(TracingProcessor):
     """Append trace + span events as JSONL into ``run_dir/events.jsonl``.
 
-    Every hook is synchronous — required by ``TracingProcessor`` ABC.
-    Every write is protected by a per-path ``threading.Lock`` so concurrent
-    spans (e.g., from parallel agent tasks) cannot interleave bytes
-    mid-line and corrupt the JSONL (C7).
-
-    Every write is wrapped in ``try/except OSError`` so a full disk or a
-    permission error during the run does NOT propagate up the hook chain
-    and tear down the agent (C16).
-
-    PII scrubbing via :class:`TelemetrySanitizer` runs on every event
-    before it hits the file.
+    Every hook is synchronous — required by the ``TracingProcessor``
+    ABC. Each write is protected by a per-path ``threading.Lock`` so
+    concurrent spans can't interleave bytes mid-line. ``OSError`` is
+    swallowed so a full disk or permission error doesn't tear the run
+    down. PII scrubbing runs on every event before it hits the file.
     """
 
     def __init__(
@@ -80,8 +68,8 @@ class StrixTracingProcessor(TracingProcessor):
     def _emit(self, event: dict[str, Any]) -> None:
         """Sanitize ``event`` and append it as one JSONL line.
 
-        Failures are swallowed — we'd rather lose a trace event than fail
-        the run. Errors are logged at WARNING (C16).
+        Failures are swallowed — we'd rather lose a trace event than
+        fail the run.
         """
         try:
             clean = self.sanitizer.sanitize(event)

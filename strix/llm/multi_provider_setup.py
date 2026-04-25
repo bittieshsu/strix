@@ -6,10 +6,6 @@ route so models named ``anthropic/<model>`` go through
 on the system message). Every other prefix
 (``openai/`` / ``gemini/`` / ``openrouter/`` / ``litellm/...``) falls
 through to the SDK's built-in litellm routing.
-
-References:
-    - PLAYBOOK.md §2.7
-    - AUDIT_R3.md C17 (model alias validation; raise UserError on bad alias)
 """
 
 from __future__ import annotations

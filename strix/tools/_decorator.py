@@ -1,24 +1,15 @@
-"""strix_tool — function_tool factory with Strix defaults.
+"""``strix_tool`` — ``function_tool`` factory with Strix defaults.
 
-Every tool in the migrated harness should be decorated with ``@strix_tool``
-instead of bare ``@function_tool`` so the team's defaults stay consistent
-without per-tool boilerplate. Override per call when needed.
+Every tool uses ``@strix_tool`` instead of bare ``@function_tool`` so
+defaults stay consistent across the suite. Override per call when
+needed.
 
 Defaults:
-    - ``timeout``: 120s (matches the legacy tool server's
-      ``STRIX_SANDBOX_EXECUTION_TIMEOUT``).
+    - ``timeout``: 120s.
     - ``timeout_behavior``: ``"error_as_result"`` for idempotent tools.
-      Critical sandbox tools (terminal, browser, python) should pass
-      ``timeout_behavior="raise_exception"`` explicitly so the SDK can fail
-      the run rather than letting the model retry the same hung call (C20).
-
-The SDK auto-threads sync function bodies via ``asyncio.to_thread``
-(``tool.py:1820-1829``), so libtmux / IPython / blocking httpx code can be
-written as plain ``def`` and the decorator will not block the event loop.
-
-References:
-    - PLAYBOOK.md §2.6
-    - AUDIT_R3.md C20 (per-tool timeout_behavior discrimination)
+      Critical sandbox tools (terminal, browser, python) opt into
+      ``timeout_behavior="raise_exception"`` explicitly so the SDK
+      fails the run rather than letting the model retry a hung call.
 """
 
 from __future__ import annotations
@@ -44,17 +35,10 @@ def strix_tool(
 ) -> Callable[[_ToolFn], FunctionTool]:
     """Wrap ``agents.function_tool`` with Strix defaults.
 
-    The SDK's ``FunctionTool`` requires ``async def`` for ``timeout_seconds``
-    to apply (sync handlers cannot be cleanly cancelled). All Strix tools are
-    ``async def``; sync libraries (libtmux, IPython) get wrapped in
-    ``asyncio.to_thread`` inside the async tool body.
-
-    The SDK enforces ``strict_mode=True`` by default, which forbids
-    free-form ``dict[str, X]`` parameters (the strict JSON schema needs
-    ``additionalProperties: false``). A handful of legacy tools
-    (``send_request``, ``repeat_request``) take arbitrary header /
-    modification dicts whose keys can't be enumerated, so they must
-    opt out of strict mode to preserve parity with the XML schema.
+    Strict mode is on by default (forbids free-form ``dict[str, X]``
+    parameters because the strict JSON schema needs
+    ``additionalProperties: false``). A few tools that take arbitrary
+    header / modification dicts opt out via ``strict_mode=False``.
 
     Usage::
 

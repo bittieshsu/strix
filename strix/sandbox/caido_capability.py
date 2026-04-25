@@ -8,10 +8,9 @@ Three concerns wired into the SDK's capability lifecycle:
    etc.) now flows through the proxy automatically.
 
 2. **Tool exposure** (``tools``): the seven Caido SDK function-tool
-   wrappers from Phase 2.5 are returned here. The SDK runtime collects
-   tools from every capability and merges them with the agent's
-   ``tools=[...]`` declaration, so individual agents don't have to
-   redeclare them.
+   wrappers are returned here. The SDK runtime collects tools from
+   every capability and merges them with the agent's ``tools=[...]``
+   declaration, so agents don't have to redeclare them.
 
 3. **Healthcheck task** (``bind``): when a session binds, we kick off
    :func:`wait_for_http_ready` against the FastAPI tool server's
@@ -21,10 +20,6 @@ Three concerns wired into the SDK's capability lifecycle:
    :class:`StrixOrchestrationHooks.on_agent_start` hook awaits before
    the first LLM call so the agent never hits a connection-refused
    on its very first tool invocation.
-
-References:
-    - PLAYBOOK.md §3.2
-    - AUDIT.md §2.5 (C5 — healthcheck wired to RunHooks)
 """
 
 from __future__ import annotations

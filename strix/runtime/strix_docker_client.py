@@ -11,13 +11,8 @@ additions before the final create call:
 These are required for raw-socket pentest tools (nmap -sS) and for letting
 the agent reach host-served apps via ``host.docker.internal``.
 
-Pinned to ``openai-agents==0.14.6``. Bumping the SDK version requires
-re-merging the parent body. Track upstream PR for an injection hook.
-
-References:
-    - PLAYBOOK.md §2.2
-    - AUDIT.md §2.3 (C3 — original blocker)
-    - SDK source: ``/tmp/openai-agents/src/agents/sandbox/sandboxes/docker.py:1434-1477``
+Pinned to ``openai-agents==0.14.6``. Bumping the SDK requires
+re-merging the parent body. Track upstream for an injection hook.
 """
 
 from __future__ import annotations

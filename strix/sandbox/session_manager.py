@@ -12,9 +12,6 @@ issuing multiple ``create_or_reuse`` calls (e.g., resume after a crash
 on the host side) gets the same bundle back. ``cleanup`` is best-effort
 — a leaked container is preferable to a stuck cleanup that prevents the
 next scan from starting.
-
-References:
-    - PLAYBOOK.md §3.3
 """
 
 from __future__ import annotations

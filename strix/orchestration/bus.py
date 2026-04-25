@@ -1,14 +1,8 @@
-"""AgentMessageBus — peer-to-peer multi-agent state owned by Strix.
+"""``AgentMessageBus`` — peer-to-peer multi-agent state for one scan.
 
 A single ``asyncio.Lock``-protected dataclass that owns inboxes,
 parent edges, statuses, and per-agent stats for the lifetime of one
 Strix scan.
-
-References:
-    - PLAYBOOK.md §2.3
-    - AUDIT_R2.md §1.4 (cancel_descendants)
-    - AUDIT_R2.md §1.7 (stats snapshot under lock)
-    - AUDIT_R3.md C13 (finalize cleans up state to avoid orphaned-message leak)
 """
 
 from __future__ import annotations
@@ -69,9 +63,8 @@ class AgentMessageBus:
     async def send(self, target: str, msg: dict[str, Any]) -> None:
         """Append a message to ``target``'s inbox.
 
-        Idempotent if target was never registered: creates an empty inbox.
-        Messages addressed to a finalized agent are dropped silently — the
-        target's inbox was cleared in :meth:`finalize` (C13).
+        Messages addressed to a finalized agent are dropped silently —
+        :meth:`finalize` clears the inbox so they can't accumulate.
         """
         async with self._lock:
             if target not in self.statuses:
@@ -115,9 +108,8 @@ class AgentMessageBus:
     async def finalize(self, agent_id: str, status: str) -> None:
         """Move an agent from live to completed; clean up routing state.
 
-        C13 (AUDIT_R3): also clears ``inboxes``, ``parent_of``, ``names`` so
-        sibling agents that try to send to a finished agent don't accumulate
-        orphan messages forever.
+        Also clears ``inboxes``, ``parent_of``, ``names`` so siblings
+        that send to a finished agent can't accumulate orphan messages.
         """
         async with self._lock:
             self.statuses[agent_id] = status
@@ -127,7 +119,7 @@ class AgentMessageBus:
             self.names.pop(agent_id, None)
 
     async def total_stats(self) -> dict[str, Any]:
-        """Snapshot of live + completed stats. Lock-protected (C12)."""
+        """Snapshot of live + completed stats."""
         async with self._lock:
             agg = {"in": 0, "out": 0, "cached": 0, "cost": 0.0, "calls": 0}
             for stats in (*self.stats_live.values(), *self.stats_completed.values()):
@@ -138,9 +130,9 @@ class AgentMessageBus:
     async def cancel_descendants(self, root_agent_id: str) -> None:
         """Cancel ``root_agent_id`` and every transitive child, leaves first.
 
-        Wired into the CLI Ctrl+C handler and TUI stop button so a root cancel
-        actually propagates (C9 — SDK's ``result.cancel`` does not cascade
-        to children spawned via ``asyncio.create_task``).
+        Wired into the CLI Ctrl+C handler and TUI stop button —
+        the SDK's ``result.cancel`` doesn't cascade to children spawned
+        via ``asyncio.create_task``, so we walk the tree ourselves.
         """
         async with self._lock:
             queue = [root_agent_id]

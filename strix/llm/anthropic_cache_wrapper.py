@@ -1,13 +1,9 @@
-"""AnthropicCachingLitellmModel — inject cache_control on the system message.
+"""``AnthropicCachingLitellmModel`` — inject ``cache_control`` on the system message.
 
-ModelSettings.extra_body lands the field at the request top level, which
-Anthropic ignores. Anthropic only honors ``cache_control`` when it is on the
-message itself. We patch the input list before delegating to the parent.
-
-References:
-    - PLAYBOOK.md §2.1
-    - AUDIT.md §2.2 (C2 — original blocker)
-    - AUDIT_R3.md F1 (signature: first 7 params positional, then *,)
+``ModelSettings.extra_body`` lands fields at the request top level,
+which Anthropic ignores. Anthropic only honors ``cache_control`` when
+it is on the message itself, so we patch the input list before
+delegating to the parent.
 """
 
 from __future__ import annotations

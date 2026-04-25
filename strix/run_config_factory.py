@@ -1,18 +1,7 @@
-"""make_run_config — assemble a Strix-flavored ``RunConfig`` for ``Runner.run``.
+"""``make_run_config`` — assemble a Strix-flavored ``RunConfig`` for ``Runner.run``.
 
-Factory pattern: every Strix scan goes through here so the defaults are
-applied uniformly. Per-call overrides are accepted via ``model_settings_override``
-for the rare case a single run wants different reasoning effort or
-``tool_choice`` (C21).
-
-References:
-    - PLAYBOOK.md §2.10
-    - AUDIT.md §2.1 (C1 — parallel_tool_calls=False until Phase 6 relaxes the
-      tool server's per-agent task slot serialization)
-    - AUDIT_R2.md §1.6 (C11 — retry policy explicitly excludes 401/403/400;
-      auth and validation errors must fail fast, not waste retries)
-    - AUDIT_R3.md C21 — RunConfig override + context fields including
-      ``is_whitebox``, ``diff_scope``, ``run_id``
+Every scan goes through here so defaults apply uniformly. Per-call
+overrides land via ``model_settings_override``.
 """
 
 from __future__ import annotations
@@ -39,14 +28,12 @@ if TYPE_CHECKING:
     from strix.orchestration.bus import AgentMessageBus
 
 
-# Phase 6 relaxes the tool server's per-agent task-slot serialization
-# (``runtime/tool_server.py:94-97``) and flips this to ``True`` after
-# multi-agent stress tests confirm safety.
-_PHASE1_PARALLEL_DEFAULT = False
+# Sequential tool calls per agent — the tool server serializes one task
+# per agent at a time, so concurrent calls would queue anyway.
+_PARALLEL_TOOL_CALLS_DEFAULT = False
 
-# Default retry policy. Explicitly does NOT include 401/403/400 — those are
-# auth and validation errors that retrying cannot fix; they should fail fast
-# so the user sees the real error within seconds. 429/5xx is the right set.
+# Retry policy. 401/403/400 are deliberately excluded — auth and
+# validation errors can't be fixed by retrying and should fail fast.
 _RETRYABLE_HTTP_STATUSES = (429, 500, 502, 503, 504)
 
 # Default retry budget: 5 attempts with ``min(90, 2*2^n)`` backoff.
@@ -82,7 +69,7 @@ def make_run_config(
     *,
     sandbox_session: BaseSandboxSession | None,
     model: str = "anthropic/claude-sonnet-4-6",
-    parallel_tool_calls: bool = _PHASE1_PARALLEL_DEFAULT,
+    parallel_tool_calls: bool = _PARALLEL_TOOL_CALLS_DEFAULT,
     tool_choice: Literal["auto", "required", "none"] | None = "required",
     reasoning_effort: Literal["low", "medium", "high"] | None = None,
     model_settings_override: ModelSettings | None = None,
@@ -90,32 +77,27 @@ def make_run_config(
 ) -> RunConfig:
     """Build a ``RunConfig`` with Strix defaults.
 
-    Note: ``max_turns`` and ``isolate_parallel_failures`` are NOT
-    ``RunConfig`` fields — they are passed directly to ``Runner.run``.
-    Use ``STRIX_DEFAULT_MAX_TURNS`` for the budget; pass
-    ``isolate_parallel_failures=False`` to ``Runner.run`` if Phase 6 has
-    not yet flipped ``parallel_tool_calls=True``.
+    Note: ``max_turns`` is not a ``RunConfig`` field — pass it directly
+    to ``Runner.run``. ``STRIX_DEFAULT_MAX_TURNS`` is the budget Strix
+    uses.
 
     Args:
-        sandbox_session: Live sandbox session shared by every agent in this
-            scan (one container per scan; see ``strix.sandbox.session_manager``).
-            ``None`` is allowed for unit tests and dry runs.
-        model: Model alias to pass to ``MultiProvider``. Defaults to the
-            current production-favored Anthropic alias.
-        parallel_tool_calls: Default ``False`` to keep behavior sequential
-            per the tool server's slot serialization (C1).
+        sandbox_session: Live sandbox session shared by every agent in
+            this scan (one container per scan; see
+            :mod:`strix.sandbox.session_manager`). ``None`` is allowed
+            for unit tests and dry runs.
+        model: Model alias passed to ``MultiProvider``. Defaults to the
+            production Anthropic alias.
+        parallel_tool_calls: Default ``False`` — the tool server
+            serializes one task per agent.
         tool_choice: Forces tool use per turn unless explicitly relaxed.
-            Pass ``None`` to omit.
         reasoning_effort: ``"low" | "medium" | "high"``; routes to
-            ``ModelSettings.reasoning``. ``None`` defers to provider default.
-        model_settings_override: Optional ``ModelSettings`` to merge over
-            the factory defaults (C21 — per-run override path).
-        sandbox_client: Optional pre-built sandbox client (e.g., the Strix
-            Docker subclass). Defaults to ``None``; the SDK will instantiate
-            its built-in if a session is supplied without a client.
-
-    Returns:
-        A ``RunConfig`` ready to pass to ``Runner.run``.
+            ``ModelSettings.reasoning``.
+        model_settings_override: Optional per-run ``ModelSettings``
+            merged over factory defaults.
+        sandbox_client: Optional pre-built sandbox client (Strix Docker
+            subclass). The SDK instantiates its built-in if a session is
+            supplied without a client.
     """
     base_settings = ModelSettings(
         parallel_tool_calls=parallel_tool_calls,
@@ -175,14 +157,14 @@ def make_agent_context(
 ) -> dict[str, Any]:
     """Build the per-agent ``context`` dict passed to ``Runner.run(context=...)``.
 
-    The dict is the canonical place where bus, sandbox handles, identity,
-    tracer reference, and per-agent toggles live. Tools, hooks, and the
-    ``inject_messages_filter`` all reach in via ``ctx.context.get(...)``.
+    The canonical place where bus, sandbox handles, identity, tracer
+    reference, and per-agent toggles live. Tools, hooks, and
+    ``inject_messages_filter`` reach in via ``ctx.context.get(...)``.
 
-    ``agent_factory`` is a callable ``(name, skills) -> agents.Agent`` used by
-    the ``create_agent`` graph tool to spin up children. ``sandbox_client``
-    is the host-side Docker subclass; ``create_agent`` reuses it across
-    child runs.
+    ``agent_factory`` is a callable ``(name, skills) -> agents.Agent`` —
+    the ``create_agent`` graph tool uses it to spin up children that
+    inherit the same wiring. ``sandbox_client`` is the host-side Docker
+    subclass, reused across child runs.
     """
     return {
         "bus": bus,

@@ -16,9 +16,6 @@ Two helpers are exposed:
 - :func:`wait_for_tcp_ready` for Caido, which serves an HTTP forward
   proxy on its port and does *not* expose ``/health``. A TCP connect
   is the most we can probe without sending real proxy traffic.
-
-References:
-    - PLAYBOOK.md §3.1
 """
 
 from __future__ import annotations

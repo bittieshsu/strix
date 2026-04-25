@@ -299,38 +299,31 @@ ignore = [
 # CaidoCapability uses agents.tool.Tool at runtime — pydantic Field
 # annotations and the cached _CAIDO_TOOLS tuple need it eagerly.
 "strix/sandbox/caido_capability.py" = ["TC002"]
-# Agent factory: agents.tool.Tool is used at runtime in the _BASE_TOOLS
-# tuple type, not just for annotations.
-"strix/agents/sdk_factory.py" = ["TC002"]
 # Entry point: ``Path`` is used at runtime by the typing of the
 # session_manager call; importing under TYPE_CHECKING would defer
 # resolution past where mypy needs it. ``_build_root_task`` legitimately
 # walks every supported target type — splitting it into per-type
 # helpers would add indirection without simplifying anything.
 "strix/entry.py" = ["TC003", "PLR0912"]
-# Legacy tracer module — pre-existing PLR/E501 patterns; full refactor
-# is out of scope for the harness migration. ``Callable`` is a runtime
+# Tracer carries a long event surface and a runtime ``Callable``
 # annotation on ``vulnerability_found_callback``.
 "strix/telemetry/tracer.py" = ["TC003", "PLR0912", "PLR0915", "E501"]
-# Legacy interface utility with intentionally many branches per supported
-# scope-mode / target-type combination; refactor would obscure the
-# decision tree without simplifying it.
+# Interface utility branches per scope-mode / target-type combination;
+# splitting would obscure the decision tree without simplifying it.
 "strix/interface/utils.py" = ["PLR0912", "BLE001", "PLC0415"]
-# CLI / TUI / main keep extensive lazy imports + broad exception swallows
-# for resilience around terminal-rendering errors. Refactor is out of
-# scope for the harness migration.
+# CLI / TUI / main keep extensive lazy imports + broad exception
+# swallows for resilience around terminal-rendering errors.
 "strix/interface/cli.py" = ["BLE001", "PLC0415"]
 "strix/interface/tui.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915", "SIM105"]
 "strix/interface/main.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
 "strix/interface/streaming_parser.py" = ["PLC0415"]
 "strix/interface/tool_components/agent_message_renderer.py" = ["PLC0415"]
-# Sandbox dispatch helper has many short-circuit error returns (auth fail,
-# size cap, decode fail, etc). Each is a distinct, documented failure mode
-# the model needs to see verbatim — collapsing them harms readability.
+# Each short-circuit error return in the sandbox dispatch is a distinct,
+# documented failure mode the model needs to see verbatim.
 "strix/tools/_sandbox_dispatch.py" = ["PLR0911"]
-# StrixSession + StrixTracingProcessor catch broad Exception intentionally:
-# the whole point is that compressor / sanitizer / disk failures must not
-# tear down the agent run (C10, C16). Calls already log at exception level.
+# StrixSession + StrixTracingProcessor catch broad Exception
+# intentionally: compressor / sanitizer / disk failures must not tear
+# down the run. Calls already log at exception level.
 "strix/llm/strix_session.py" = ["BLE001"]
 "strix/telemetry/strix_processor.py" = ["BLE001"]
 

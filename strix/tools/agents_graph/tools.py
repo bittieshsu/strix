@@ -1,29 +1,16 @@
-"""SDK function-tool wrappers for the multi-agent graph tools.
+"""Multi-agent graph tools — read/write the :class:`AgentMessageBus`.
 
-Six tools that read/write the :class:`AgentMessageBus` (built in Phase 0,
-``strix.orchestration.bus``):
-
-- ``view_agent_graph``: render the parent/child tree from ``bus.parent_of``.
+- ``view_agent_graph``: render the parent/child tree.
 - ``agent_status``: per-agent status + pending message count.
-- ``send_message_to_agent``: peer-to-peer message into a child/sibling inbox.
-- ``wait_for_message``: poll our own inbox until a message arrives or the
-  timeout expires (the legacy harness's "I'm idle, wake me on inbox").
-- ``create_agent``: spawn a child via ``asyncio.create_task(Runner.run(...))``;
-  registers the child with the bus and stores its task handle so root cancels
-  cascade (C9, ``bus.cancel_descendants``).
-- ``agent_finish``: subagents only — flips ``agent_finish_called`` so the
-  on_agent_end hook records "completed" rather than "crashed" (C8), and
-  posts a structured completion report to the parent's inbox.
-
-The legacy ``strix.tools.agents_graph.agents_graph_actions`` is left
-untouched — it still drives the legacy harness. These wrappers only
-target the bus and don't touch the legacy ``_agent_graph`` dict.
-
-References:
-    - PLAYBOOK.md §4.3
-    - AUDIT_R2.md §1.4 (cancel_descendants — Runner.run task handle stored
-      in bus.tasks so a root cancel walks the tree)
-    - AUDIT_R3.md C8 (crash detection via on_agent_end + agent_finish_called)
+- ``send_message_to_agent``: queue a message in another agent's inbox.
+- ``wait_for_message``: pause this agent until a message arrives or
+  ``timeout_seconds`` elapses.
+- ``create_agent``: spawn a child via
+  ``asyncio.create_task(Runner.run(...))``; the task handle is stored
+  so a root-level cancel cascades to descendants.
+- ``agent_finish``: subagents only — flips ``agent_finish_called`` so
+  the ``on_agent_end`` hook records "completed" rather than "crashed",
+  and posts a structured completion report to the parent's inbox.
 """
 
 from __future__ import annotations
@@ -223,8 +210,7 @@ async def send_message_to_agent(
     )
 
 
-# Polling cadence for ``wait_for_message``. 1s matches the PLAYBOOK
-# skeleton; tighter would burn CPU, slacker would feel laggy when a sibling
+# Tighter would burn CPU; slacker would feel laggy when a sibling
 # delivers a message right after the wait starts.
 _WAIT_POLL_SECONDS = 1.0
 

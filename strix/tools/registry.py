@@ -1,14 +1,14 @@
 """Minimal in-container tool registry.
 
 Used inside the sandbox container by ``strix.runtime.tool_server`` to
-look up `@register_tool`-decorated functions by name. Sandbox-bound
-tools (browser, terminal, python, file_edit, proxy) live as legacy
+look up ``@register_tool``-decorated functions by name. Sandbox-bound
+tools (browser, terminal, python, file_edit, proxy) live as
 ``*_actions.py`` modules with this decoration; the host POSTs to
 :func:`tool_server.execute_tool` which dispatches via
 :func:`get_tool_by_name`.
 
-Host-side tools are pure SDK function tools wired through
-:mod:`strix.agents.factory` and don't touch this registry at all.
+Host-side SDK function tools are wired through
+:mod:`strix.agents.factory` and don't touch this registry.
 """
 
 import logging
@@ -23,17 +23,6 @@ logger = logging.getLogger(__name__)
 
 tools: list[dict[str, Any]] = []
 _tools_by_name: dict[str, Callable[..., Any]] = {}
-
-
-class ImplementedInClientSideOnlyError(Exception):
-    """Raised by sandbox-side stubs whose real implementation lives host-side."""
-
-    def __init__(
-        self,
-        message: str = "This tool is implemented in the client side only",
-    ) -> None:
-        self.message = message
-        super().__init__(self.message)
 
 
 def _is_sandbox_mode() -> bool:

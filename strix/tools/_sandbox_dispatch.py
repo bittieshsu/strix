@@ -1,24 +1,14 @@
-"""post_to_sandbox — host-to-container HTTP transport for sandbox tools.
+"""``post_to_sandbox`` — host-to-container HTTP transport for sandbox tools.
 
-Every Strix tool that runs inside the Kali container (browser, terminal,
-python, the seven Caido tools) has the same wire shape: POST a JSON body
-to ``http://localhost:{tool_server_host_port}/execute`` with a Bearer
-token header and ``{"agent_id", "tool_name", "kwargs"}`` as the body.
+Every Strix tool that runs inside the Kali container (browser,
+terminal, python, file_edit, the seven Caido tools) has the same wire
+shape: POST JSON to ``http://localhost:{tool_server_host_port}/execute``
+with a Bearer token and ``{"agent_id", "tool_name", "kwargs"}`` body.
 
-This helper centralizes that transport so:
-
-- Every sandbox tool gets the same timeout policy
-  (``connect=10s`` / ``read=150s``).
-- Every sandbox tool inherits the same response-size cap (50 MB) so a
-  runaway tool body cannot OOM the host (C18).
-- Auth/transport errors surface as predictable error strings instead of
-  exceptions, so the model can retry / pick a different tool without the
-  run dying.
-
-References:
-    - PLAYBOOK.md §3.4
-    - AUDIT_R3.md C18 (sandbox response size cap)
-    - HARNESS_WIKI.md §7.2 (legacy executor.py wire format we mirror)
+The helper centralizes timeouts (``connect=10s`` / ``read=150s``), a
+50 MB response-size cap so a runaway tool can't OOM the host, and
+predictable error-string shaping so transport failures don't tear
+down the run.
 """
 
 from __future__ import annotations
@@ -36,14 +26,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Connect: how long to wait for the TCP handshake to complete.
-# Read: how long the tool may spend executing before we abandon the call.
-# Mirrors the legacy executor.py (``SANDBOX_EXECUTION_TIMEOUT = 120 + 30``).
 _SANDBOX_TIMEOUT = httpx.Timeout(connect=10.0, read=150.0, write=150.0, pool=150.0)
 
-#: Cap on response body size from the tool server. Anything bigger is
-#: replaced by an error string so the model sees something coherent and
-#: the host doesn't OOM trying to allocate the buffer (C18).
+# Cap so a runaway tool body never blows up the host heap.
 _MAX_RESPONSE_BYTES = 50 * 1024 * 1024  # 50 MB
 
 

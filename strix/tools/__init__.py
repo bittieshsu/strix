@@ -17,13 +17,7 @@ from .finish import *  # noqa: F403
 from .notes import *  # noqa: F403
 from .proxy import *  # noqa: F403
 from .python import *  # noqa: F403
-from .registry import (
-    ImplementedInClientSideOnlyError,
-    get_tool_by_name,
-    get_tool_names,
-    register_tool,
-    tools,
-)
+from .registry import get_tool_by_name, get_tool_names, register_tool, tools
 from .reporting import *  # noqa: F403
 from .terminal import *  # noqa: F403
 from .thinking import *  # noqa: F403
@@ -32,7 +26,6 @@ from .web_search import *  # noqa: F403
 
 
 __all__ = [
-    "ImplementedInClientSideOnlyError",
     "get_tool_by_name",
     "get_tool_names",
     "register_tool",

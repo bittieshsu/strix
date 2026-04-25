@@ -1,13 +1,4 @@
-"""StrixOrchestrationHooks — RunHooks subclass wiring bus + tracer + warnings.
-
-References:
-    - PLAYBOOK.md §2.5
-    - AUDIT.md §2.5  (C5 — streaming/hook bridge)
-    - AUDIT_R2.md §1.3 (C8 — subagent crash detection)
-    - AUDIT_R3.md F2 (context types: AgentHookContext for agent_*,
-      RunContextWrapper otherwise; on_tool_end result is str)
-    - AUDIT_R3.md C15 (every hook body try/except so a hook bug never tears down the run)
-"""
+"""``StrixOrchestrationHooks`` — RunHooks wiring bus + tracer + warnings."""
 
 from __future__ import annotations
 
@@ -27,16 +18,17 @@ class StrixOrchestrationHooks(RunHooks[Any]):
 
     Wires four concerns:
 
-    1. Turn-budget warnings injected into ``input_items`` at 85% and ``N - 3``
-       of ``max_turns``.
-    2. LLM usage recording into the bus.
-    3. Sandbox readiness: awaits the ``CaidoCapability._healthcheck_task``
-       on first agent start so the agent doesn't fire tools before Caido and
-       the tool server are ready.
-    4. Subagent crash detection (C8): if ``on_agent_end`` fires without
-       ``agent_finish_called`` being set in context, posts a synthetic
-       ``<agent_crash>`` message to the parent's inbox so the parent learns
-       on its next turn instead of polling ``wait_for_message`` forever.
+    1. Turn-budget warnings injected into ``input_items`` at 85% and
+       ``N - 3`` of ``max_turns``.
+    2. LLM usage recording into the bus + tracer.
+    3. Sandbox readiness: awaits the
+       ``CaidoCapability._healthcheck_task`` on first agent start so
+       the agent doesn't fire tools before Caido and the tool server
+       are ready.
+    4. Subagent crash detection: if ``on_agent_end`` fires without
+       ``agent_finish_called`` being set, posts a synthetic
+       ``<agent_crash>`` message to the parent's inbox so the parent
+       learns on its next turn instead of waiting forever.
     """
 
     async def on_llm_start(
@@ -105,7 +97,7 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                     input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
                     output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
                     cached_tokens=cached,
-                    cost=0.0,  # litellm cost computation lives in the legacy LLM
+                    cost=0.0,
                     requests=1,
                     bucket="live",
                 )
@@ -203,12 +195,3 @@ class StrixOrchestrationHooks(RunHooks[Any]):
                 tracer.log_tool_end(ctx.get("agent_id", "?"), tool.name, result)
         except Exception:
             logger.exception("on_tool_end failed")
-
-    async def on_handoff(
-        self,
-        context: RunContextWrapper[Any],
-        from_agent: Any,
-        to_agent: Any,
-    ) -> None:
-        # Strix multi-agent goes through the bus; SDK handoffs are unused.
-        pass

@@ -1,14 +1,8 @@
-"""inject_messages_filter — SDK ``call_model_input_filter`` for the message bus.
+"""``inject_messages_filter`` — SDK ``call_model_input_filter`` for the bus.
 
 The SDK runs ``call_model_input_filter`` exactly once per turn before
-the LLM call (``run_internal/turn_preparation.py:55-80``) and captures
-the filter's output in a lambda closure for any subsequent retries
-(``run_internal/model_retry.py:34-35``) — so a single drain per turn
-does not lose messages on retry.
-
-References:
-    - PLAYBOOK.md §2.4
-    - AUDIT_R3.md C14 (filter must be defensive — exception → unmodified data)
+the LLM call and captures the output in a closure for any subsequent
+retries — so a single drain per turn doesn't lose messages on retry.
 """
 
 from __future__ import annotations
@@ -32,12 +26,12 @@ async def inject_messages_filter(data: CallModelData) -> ModelInputData:
     Each drained message is wrapped in an ``<inter_agent_message>`` XML envelope
     so the system prompt's rules around inter-agent communication apply.
 
-    Messages from the literal sender ``"user"`` (a real human via TUI) skip
-    the XML wrap and are added as plain user messages.
+    Messages from the literal sender ``"user"`` (a real human via TUI)
+    skip the XML wrap and are added as plain user messages.
 
-    C14: any exception inside the filter — including a malformed message dict
-    or a bug in ``bus.drain`` — is caught and the original ``data.model_data``
-    is returned unmodified. A bug in the filter must never tear down the run.
+    Any exception inside the filter — malformed message dict, bug in
+    ``bus.drain``, etc. — is caught and the original ``data.model_data``
+    is returned unmodified. A bug here must never tear down the run.
     """
     try:
         if not isinstance(data.context, dict):

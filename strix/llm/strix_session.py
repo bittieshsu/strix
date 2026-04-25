@@ -1,24 +1,17 @@
-"""StrixSession — Session wrapper that runs the MemoryCompressor.
+"""``StrixSession`` — Session wrapper that runs the MemoryCompressor.
 
-The SDK's `Session` (and ``SessionABC``) protocol owns conversation history
-storage. We delegate the actual storage to any underlying session
-implementation (in-memory, SQLite, Redis, …) and intercept ``get_items`` so
-the ``MemoryCompressor`` runs before the model sees the history.
+Delegates storage to any underlying session implementation (in-memory,
+SQLite, Redis, …) and intercepts ``get_items`` so the
+``MemoryCompressor`` runs before the model sees the history.
 
-Why wrap rather than reimplement:
-- ``MemoryCompressor`` already encodes the pentest-tuned summarization
-  prompt and the 90K-token budget that Strix has been tuning for months.
-  Reimplementing inside a Session would lose that institutional knowledge.
-- The SDK gives us a clean seam in ``get_items``: it's the last call before
-  ``call_model_input_filter`` runs, so compressing here means the filter
-  sees a compressed history too.
+Wrapping (rather than reimplementing) keeps the pentest-tuned
+summarization prompt and 90K-token budget intact. ``get_items`` is
+also the last hook before ``call_model_input_filter``, so compressing
+here means the filter sees a compressed history too.
 
-References:
-    - PLAYBOOK.md §2.8
-    - AUDIT_R2.md §1.5 (C10 — compressor exception → uncompressed fallback)
-    - AUDIT_R3.md §3 row W5/E2 — once compression has failed, set a flag and
-      skip future attempts so we don't infinite-loop on a permanently broken
-      compressor while the agent loop slowly drowns in context.
+If compression raises, we fall back to the uncompressed history and
+flip a flag so future attempts skip — a permanently broken compressor
+mustn't infinite-loop the agent into context starvation.
 """
 
 from __future__ import annotations
