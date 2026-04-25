@@ -38,6 +38,12 @@ def _get_notes_jsonl_path() -> Path | None:
 
 
 def _append_note_event(op: str, note_id: str, note: dict[str, Any] | None = None) -> None:
+    """Append one note operation to the run's ``notes/notes.jsonl``.
+
+    C6 (AUDIT_R2.md §1.1): hold ``_notes_lock`` across the file open + write
+    so two concurrent agents (or two parallel SDK tool calls in Phase 6)
+    cannot interleave bytes mid-line and corrupt the JSONL.
+    """
     notes_path = _get_notes_jsonl_path()
     if not notes_path:
         return
@@ -50,7 +56,7 @@ def _append_note_event(op: str, note_id: str, note: dict[str, Any] | None = None
     if note is not None:
         event["note"] = note
 
-    with notes_path.open("a", encoding="utf-8") as f:
+    with _notes_lock, notes_path.open("a", encoding="utf-8") as f:
         f.write(f"{json.dumps(event, ensure_ascii=True)}\n")
 
 

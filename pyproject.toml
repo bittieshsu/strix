@@ -283,6 +283,16 @@ ignore = [
 "strix/tools/_decorator.py" = [
     "TC002",  # FunctionTool imported for annotation
 ]
+# SDK function-tool wrappers: the SDK calls get_type_hints() at registration
+# time to derive the JSON schema, which evaluates annotations at runtime —
+# so RunContextWrapper must be imported eagerly, not under TYPE_CHECKING.
+"strix/tools/todo/todo_sdk_tools.py" = ["TC002"]
+"strix/tools/notes/notes_sdk_tools.py" = ["TC002"]
+"strix/tools/thinking/thinking_sdk_tools.py" = ["TC002"]
+# Sandbox dispatch helper has many short-circuit error returns (auth fail,
+# size cap, decode fail, etc). Each is a distinct, documented failure mode
+# the model needs to see verbatim — collapsing them harms readability.
+"strix/tools/_sandbox_dispatch.py" = ["PLR0911"]
 # StrixSession + StrixTracingProcessor catch broad Exception intentionally:
 # the whole point is that compressor / sanitizer / disk failures must not
 # tear down the agent run (C10, C16). Calls already log at exception level.
