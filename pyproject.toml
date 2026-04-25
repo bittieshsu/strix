@@ -40,16 +40,12 @@ dependencies = [
   "textual>=6.0.0",
   "requests>=2.32.0",
   "cvss>=3.2",
-  "scrubadub>=2.0.1",
   "caido-sdk-client>=0.2.0",
   "aiohttp>=3.10.0",
 ]
 
 [project.scripts]
 strix = "strix.interface.main:main"
-
-[project.optional-dependencies]
-sandbox = []
 
 [dependency-groups]
 dev = [
@@ -99,13 +95,8 @@ module = [
     "litellm.*",
     "rich.*",
     "jinja2.*",
-    "pydantic_settings.*",
-    "jwt.*",
-    "httpx.*",
-    "gql.*",
     "textual.*",
     "cvss.*",
-    "scrubadub.*",
     "docker.*",
     "caido_sdk_client.*",
     "aiohttp.*",
@@ -259,7 +250,7 @@ ignore = [
 force-single-line = false
 lines-after-imports = 2
 known-first-party = ["strix"]
-known-third-party = ["fastapi", "pydantic"]
+known-third-party = ["pydantic"]
 
 [tool.ruff.lint.pylint]
 max-args = 8
@@ -335,7 +326,7 @@ force_grid_wrap = 0
 use_parentheses = true
 ensure_newline_before_comments = true
 known_first_party = ["strix"]
-known_third_party = ["fastapi", "pydantic", "litellm"]
+known_third_party = ["pydantic", "litellm"]
 
 # ============================================================================
 # Bandit Configuration (Security Linting)

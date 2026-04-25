@@ -1,79 +1,29 @@
-"""Sandbox port readiness probes used during session bring-up.
+"""Sandbox port readiness probe used during session bring-up.
 
-The in-container tool server (FastAPI) takes a few seconds to start
-listening after the Docker container is created, and Caido's HTTPS
-proxy takes a similar window. The session manager waits for both
-before returning a session bundle so that the first tool call from
-an agent doesn't hit a connection refused.
+Caido's HTTPS proxy takes a few seconds to start listening after the
+Docker container is created. The session manager waits for it before
+returning a session bundle so that the first tool call from an agent
+doesn't hit a connection refused.
 
-Two helpers are exposed:
-
-- :func:`wait_for_http_ready` for the FastAPI tool server, whose
-  ``/health`` endpoint returns ``{"status": "healthy"}`` once the
-  process is up. We don't require the JSON shape exactly — any 2xx
-  is treated as ready.
-
-- :func:`wait_for_tcp_ready` for Caido, which serves an HTTP forward
-  proxy on its port and does *not* expose ``/health``. A TCP connect
-  is the most we can probe without sending real proxy traffic.
+:func:`wait_for_tcp_ready` is the only probe — Caido serves an HTTP
+forward proxy on its port and does *not* expose ``/health``. A TCP
+connect is the most we can probe without sending real proxy traffic.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
-
-import httpx
-
-
-logger = logging.getLogger(__name__)
 
 
 class SandboxNotReadyError(Exception):
     """Raised when a sandbox port doesn't accept connections in time."""
 
 
-# Default per-attempt HTTP timeout. 5s so a slow first request (image
-# still warming up) doesn't misfire as a hard failure on a single attempt.
-_DEFAULT_HTTP_PROBE_TIMEOUT = 5.0
-
 # Default polling cadence between attempts. Balanced for CI-style
 # fast bring-up (sub-second) without burning CPU when the port is
 # legitimately taking a few seconds.
 _DEFAULT_POLL_INTERVAL = 0.5
-
-
-async def wait_for_http_ready(
-    url: str,
-    *,
-    timeout: float = 30.0,
-    poll_interval: float = _DEFAULT_POLL_INTERVAL,
-    probe_timeout: float = _DEFAULT_HTTP_PROBE_TIMEOUT,
-) -> None:
-    """Poll ``url`` until any 2xx response, or raise after ``timeout``.
-
-    Network errors (ConnectError / TimeoutException / RequestError)
-    are treated as "not ready yet" — the loop continues. Any other
-    exception class will surface immediately so a programmer error
-    (bad URL, etc.) doesn't get silently retried for 30 seconds.
-    """
-    deadline = asyncio.get_event_loop().time() + timeout
-    last_error: str | None = None
-    async with httpx.AsyncClient(timeout=probe_timeout, trust_env=False) as client:
-        while asyncio.get_event_loop().time() < deadline:
-            try:
-                response = await client.get(url)
-                if 200 <= response.status_code < 300:
-                    return
-                last_error = f"HTTP {response.status_code}"
-            except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError) as e:
-                last_error = type(e).__name__
-            await asyncio.sleep(poll_interval)
-
-    raise SandboxNotReadyError(
-        f"HTTP probe of {url} did not return 2xx within {timeout}s (last error: {last_error})",
-    )
 
 
 async def wait_for_tcp_ready(

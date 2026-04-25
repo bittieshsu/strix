@@ -198,8 +198,7 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 RUN mkdir -p /workspace && chown -R pentester:pentester /workspace /app
 
 USER pentester
-RUN pipx install --include-deps -r /home/pentester/tools/jwt_tool/requirements.txt 2>/dev/null || \
-    python3 -m venv /app/.venv && \
+RUN python3 -m venv /app/.venv && \
     /app/.venv/bin/pip install --no-cache-dir -r /home/pentester/tools/jwt_tool/requirements.txt && \
     ln -s /home/pentester/tools/jwt_tool/jwt_tool.py /home/pentester/.local/bin/jwt_tool
 
