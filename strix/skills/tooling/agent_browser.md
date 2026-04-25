@@ -236,14 +236,31 @@ only for simple expressions.
 
 ### Screenshot
 
+`agent-browser screenshot` writes a PNG to disk in the sandbox. The
+shell command alone does **not** put the image into your context —
+chain it with the SDK ``view_image`` tool to actually see it:
+
+```bash
+exec_command:  agent-browser screenshot /workspace/page.png
+view_image:    {"path": "/workspace/page.png"}
+```
+
 ```bash
 agent-browser screenshot                        # temp path, printed on stdout
-agent-browser screenshot page.png               # specific path
+agent-browser screenshot page.png               # specific path (relative to cwd)
 agent-browser screenshot --full full.png        # full scroll height
 agent-browser screenshot --annotate map.png     # numbered labels + legend keyed to snapshot refs
 ```
 
-`--annotate` is designed for multimodal models: each label `[N]` maps to ref `@eN`.
+`--annotate` is designed for multimodal models: each label `[N]` maps
+to ref `@eN`. Take the annotated screenshot, then ``view_image`` it,
+and you can correlate visual layout with snapshot refs.
+
+Snapshots (`snapshot -i`) give you a compact text view that costs ~200-400
+tokens; screenshots cost more. Use `snapshot` first; reach for
+`screenshot + view_image` only when you actually need pixels (visual
+layout questions, captchas, custom widgets where the accessibility
+tree is incomplete).
 
 ### Handle multiple pages via tabs
 
