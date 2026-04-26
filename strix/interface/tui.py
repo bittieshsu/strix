@@ -763,6 +763,9 @@ class StrixTUIApp(App):  # type: ignore[misc]
             "run_name": args.run_name,
             "diff_scope": getattr(args, "diff_scope", {"active": False}),
             "scan_mode": getattr(args, "scan_mode", "deep"),
+            # Forward the new --instruction (if any) so the resume path
+            # can deliver it as a fresh user message after session replay.
+            "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
         }
 
     def _setup_cleanup_handlers(self) -> None:

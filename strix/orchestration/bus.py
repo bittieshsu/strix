@@ -226,15 +226,19 @@ class AgentMessageBus:
     async def finalize(self, agent_id: str, status: str) -> None:
         """Move an agent from live to completed; clean up routing state.
 
-        Also clears ``inboxes``, ``parent_of``, ``names`` so siblings
-        that send to a finished agent can't accumulate orphan messages.
+        Clears live routing state (``inboxes``, ``streams``,
+        ``_events``, ``stopping``, ``metadata`` for the spawn args) and
+        moves stats from ``stats_live`` to ``stats_completed``. Keeps
+        ``parent_of`` and ``names`` so the agent remains visible in
+        ``view_agent_graph`` and the TUI tree post-finalize. Routing
+        protection against late ``send`` calls comes from the
+        ``statuses[id]`` terminal-state check in :meth:`send`, not from
+        removing the parent/name keys.
         """
         async with self._lock:
             self.statuses[agent_id] = status
             self.stats_completed[agent_id] = self.stats_live.pop(agent_id, {})
             self.inboxes.pop(agent_id, None)
-            self.parent_of.pop(agent_id, None)
-            self.names.pop(agent_id, None)
             self.streams.pop(agent_id, None)
             self.stopping.discard(agent_id)
             self._events.pop(agent_id, None)
@@ -380,6 +384,10 @@ class AgentMessageBus:
         )
         for _aid, streamed in streams_to_cancel:
             streamed.cancel(mode="after_turn")
+        # Persist ``stopping`` so a process crash before any child finalizes
+        # doesn't lose the user's stop signal — otherwise resume would
+        # respawn the cancelled agents and they'd run forever.
+        await self._maybe_snapshot()
 
     # ------------------------------------------------------------------
     # Snapshot / restore — persist serializable state to ``bus.json`` so

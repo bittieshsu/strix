@@ -1,19 +1,30 @@
 """Per-agent todo tools.
 
-In-memory only — todos live for the lifetime of one scan, scoped per
-agent via ``ctx.context['agent_id']``. Bulk forms are preserved so the
-prompt-template documentation still works (``todos`` / ``updates`` /
-``todo_ids`` accept JSON strings or comma-separated strings).
+Per-agent in-memory dict, scoped via ``ctx.context['agent_id']``. The
+table is mirrored to ``{run_dir}/todos.json`` after every mutation so a
+process restart can ``hydrate_todos_from_disk`` and each respawned
+agent finds its prior list intact. The persistence is best-effort —
+errors are logged and swallowed so a disk failure can't kill the agent
+mid-call. Bulk forms are preserved so the prompt-template documentation
+still works (``todos`` / ``updates`` / ``todo_ids`` accept JSON strings
+or comma-separated strings).
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import tempfile
+import threading
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from agents import RunContextWrapper, function_tool
+
+
+logger = logging.getLogger(__name__)
 
 
 VALID_PRIORITIES = ["low", "normal", "high", "critical"]
@@ -35,6 +46,86 @@ def _todo_sort_key(todo: dict[str, Any]) -> tuple[int, int, str]:
 # Keyed by ``ctx.context['agent_id']`` so two agents in the same scan
 # don't see each other's lists.
 _todos_storage: dict[str, dict[str, dict[str, Any]]] = {}
+
+# On-disk mirror path. Set by ``hydrate_todos_from_disk`` once per scan;
+# unset means "no persistence" (e.g. unit tests). All writes go through
+# ``_persist`` which is a no-op until the path is set.
+_todos_path: Path | None = None
+_todos_io_lock = threading.RLock()
+
+
+def hydrate_todos_from_disk(run_dir: Path) -> None:
+    """Wire the on-disk mirror at ``{run_dir}/todos.json`` and reload it.
+
+    Called by :func:`run_strix_scan` once at scan setup. Subsequent CRUD
+    calls auto-persist after every mutation. Idempotent on missing file.
+    Tolerant of corruption — logs and starts empty rather than failing
+    the scan over a broken sidecar artifact.
+    """
+    global _todos_path  # noqa: PLW0603
+    _todos_path = run_dir / "todos.json"
+    with _todos_io_lock:
+        _todos_storage.clear()
+        if not _todos_path.exists():
+            return
+        try:
+            data = json.loads(_todos_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            logger.exception(
+                "todos.json at %s is unreadable; starting with empty todos",
+                _todos_path,
+            )
+            return
+        if not isinstance(data, dict):
+            return
+        loaded = 0
+        for aid, by_id in data.items():
+            if not isinstance(aid, str) or not isinstance(by_id, dict):
+                continue
+            cleaned = {
+                str(tid): t
+                for tid, t in by_id.items()
+                if isinstance(tid, str) and isinstance(t, dict)
+            }
+            if cleaned:
+                _todos_storage[aid] = cleaned
+                loaded += len(cleaned)
+        logger.info(
+            "todos hydrated from %s (%d agent(s), %d todo(s))",
+            _todos_path,
+            len(_todos_storage),
+            loaded,
+        )
+
+
+def _persist() -> None:
+    """Atomic-rename mirror of ``_todos_storage`` → ``{run_dir}/todos.json``.
+
+    No-op when ``_todos_path`` isn't wired (tests). Errors are logged
+    and swallowed.
+    """
+    path = _todos_path
+    if path is None:
+        return
+    try:
+        payload = json.dumps(_todos_storage, ensure_ascii=False, default=str)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with (
+            _todos_io_lock,
+            tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(path.parent),
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp,
+        ):
+            tmp.write(payload)
+            tmp_path = Path(tmp.name)
+        tmp_path.replace(path)
+    except Exception:
+        logger.exception("todos persist to %s failed", path)
 
 
 def _agent_id_from(ctx: RunContextWrapper) -> str:
@@ -279,6 +370,7 @@ async def create_todo(
             default=str,
         )
 
+    _persist()
     return json.dumps(
         {
             "success": True,
@@ -419,6 +511,8 @@ async def update_todo(
     except (ValueError, TypeError) as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False, default=str)
 
+    if updated:
+        _persist()
     response: dict[str, Any] = {
         "success": len(errors) == 0,
         "updated": updated,
@@ -464,6 +558,8 @@ def _mark(
     except (ValueError, TypeError) as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False, default=str)
 
+    if marked:
+        _persist()
     key = "marked_done" if new_status == "done" else "marked_pending"
     response: dict[str, Any] = {
         "success": len(errors) == 0,
@@ -556,6 +652,8 @@ async def delete_todo(
     except (ValueError, TypeError) as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False, default=str)
 
+    if deleted:
+        _persist()
     response: dict[str, Any] = {
         "success": len(errors) == 0,
         "deleted": deleted,

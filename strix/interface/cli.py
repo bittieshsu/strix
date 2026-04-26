@@ -111,6 +111,10 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         "run_name": args.run_name,
         "diff_scope": getattr(args, "diff_scope", {"active": False}),
         "scan_mode": scan_mode,
+        # Forward the new --instruction (if any) to the resume path so it
+        # can deliver it as a fresh user message after SDK session replay.
+        # Empty string when the user didn't pass one on resume — no-op.
+        "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
     }
 
     tracer = Tracer(args.run_name)

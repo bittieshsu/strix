@@ -95,24 +95,67 @@ class Tracer:
         return self._run_dir
 
     def hydrate_from_run_dir(self) -> None:
-        """Reload ``vulnerability_reports`` from ``{run_dir}/vulnerabilities.json``.
+        """Reload prior-scan state from ``{run_dir}/`` for resume.
 
-        Called by the resume path in :func:`run_strix_scan` before any
-        new agent runs. Ensures id allocation in
-        :meth:`add_vulnerability_report` does not collide on disk
-        (``vuln-0001`` re-used would otherwise overwrite the prior MD).
-        Idempotent — calling without a JSON file is a no-op.
+        Called by :func:`run_strix_scan` before any new agent runs.
+        Restores:
+
+        - ``vulnerability_reports`` from ``vulnerabilities.json`` so
+          :meth:`add_vulnerability_report` doesn't allocate a colliding
+          ``vuln-0001`` and overwrite the prior on-disk MD.
+        - ``run_metadata`` (start_time, run_id, targets, status) from
+          ``run_metadata.json`` so audit-trail timestamps + the final
+          report's duration calc reflect the original scan, not just
+          this resume segment.
+
+        Idempotent on missing files (fresh runs land here too via the
+        same code path). **Raises on corruption** — silently swallowing
+        a corrupt ``vulnerabilities.json`` would let the next vuln
+        allocate ``vuln-0001`` and overwrite the prior MD on disk
+        (data loss). Caller is expected to fail the run loud and let
+        the user inspect ``{run_dir}`` or pick a fresh ``--run-name``.
         """
-        try:
-            json_path = self.get_run_dir() / "vulnerabilities.json"
-            if not json_path.exists():
-                return
-            data = json.loads(json_path.read_text(encoding="utf-8"))
+        run_dir = self.get_run_dir()
+
+        meta_path = run_dir / "run_metadata.json"
+        if meta_path.exists():
+            try:
+                data = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"run_metadata.json at {meta_path} is unreadable: {exc}",
+                ) from exc
+            if isinstance(data, dict):
+                if isinstance(data.get("start_time"), str):
+                    self.start_time = data["start_time"]
+                self.run_metadata.update(
+                    {
+                        k: v
+                        for k, v in data.items()
+                        if k in {"run_id", "run_name", "start_time", "targets", "status"}
+                    },
+                )
+                logger.info(
+                    "tracer hydrated run_metadata from %s (start_time=%s)",
+                    meta_path,
+                    self.start_time,
+                )
+
+        json_path = run_dir / "vulnerabilities.json"
+        if json_path.exists():
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"vulnerabilities.json at {json_path} is corrupt ({exc}); "
+                    f"refusing to start fresh — that would overwrite prior "
+                    f"vulnerability MDs on disk. Inspect or delete the run dir.",
+                ) from exc
             if not isinstance(data, list):
-                return
+                raise RuntimeError(
+                    f"vulnerabilities.json at {json_path} is not a list",
+                )
             self.vulnerability_reports = [r for r in data if isinstance(r, dict)]
-            # Pre-mark these ids as already-saved so the writer doesn't
-            # re-emit per-vuln markdown on the next save() call.
             writer = self._get_writer()
             for r in self.vulnerability_reports:
                 rid = r.get("id")
@@ -123,8 +166,74 @@ class Tracer:
                 len(self.vulnerability_reports),
                 json_path,
             )
-        except Exception:
-            logger.exception("tracer hydrate_from_run_dir failed; starting fresh")
+
+        bus_path = run_dir / "bus.json"
+        if bus_path.exists():
+            try:
+                bus_data = json.loads(bus_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                # Caller will surface this same corruption via ``bus.restore``;
+                # no need to fail twice. Skip the agents/stats hydrate path.
+                bus_data = None
+            if isinstance(bus_data, dict):
+                self._hydrate_agents_tree(bus_data)
+                self._hydrate_llm_stats(bus_data)
+
+    def _hydrate_agents_tree(self, bus_data: dict[str, Any]) -> None:
+        """Populate ``self.agents`` from a bus snapshot.
+
+        Without this, the TUI tree on resume would only show agents
+        currently running (mirrored by ``on_agent_start``); completed /
+        crashed / stopped children from the prior run would be invisible
+        even though the bus knows about them.
+        """
+        statuses = bus_data.get("statuses") or {}
+        names = bus_data.get("names") or {}
+        parent_of = bus_data.get("parent_of") or {}
+        if not isinstance(statuses, dict):
+            return
+        timestamp = self.start_time
+        for agent_id, status in statuses.items():
+            if not isinstance(agent_id, str):
+                continue
+            self.agents[agent_id] = {
+                "id": agent_id,
+                "name": names.get(agent_id, agent_id) if isinstance(names, dict) else agent_id,
+                "parent_id": parent_of.get(agent_id) if isinstance(parent_of, dict) else None,
+                "status": status,
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            }
+        logger.info("tracer hydrated %d agent(s) into tree", len(self.agents))
+
+    def _hydrate_llm_stats(self, bus_data: dict[str, Any]) -> None:
+        """Seed ``self._llm_stats`` from the bus snapshot's per-agent counters.
+
+        Aggregates ``stats_live + stats_completed`` so the resumed scan's
+        TUI footer shows cumulative tokens / requests across the prior
+        run plus whatever the resume adds, instead of resetting to zero.
+        """
+        totals = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "requests": 0}
+        for bucket_key in ("stats_live", "stats_completed"):
+            bucket = bus_data.get(bucket_key) or {}
+            if not isinstance(bucket, dict):
+                continue
+            for entry in bucket.values():
+                if not isinstance(entry, dict):
+                    continue
+                totals["input_tokens"] += int(entry.get("in", 0) or 0)
+                totals["output_tokens"] += int(entry.get("out", 0) or 0)
+                totals["cached_tokens"] += int(entry.get("cached", 0) or 0)
+                totals["requests"] += int(entry.get("calls", 0) or 0)
+        for k, v in totals.items():
+            self._llm_stats[k] = v
+        logger.info(
+            "tracer hydrated llm stats from bus (in=%d out=%d cached=%d requests=%d)",
+            totals["input_tokens"],
+            totals["output_tokens"],
+            totals["cached_tokens"],
+            totals["requests"],
+        )
 
     def _get_writer(self) -> ScanArtifactWriter:
         if self._writer is None:
@@ -280,6 +389,7 @@ class Tracer:
         self._get_writer().save(
             vulnerability_reports=self.vulnerability_reports,
             final_scan_result=self.final_scan_result,
+            run_metadata=dict(self.run_metadata),
         )
 
     def log_tool_start(

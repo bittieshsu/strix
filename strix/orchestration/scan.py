@@ -258,6 +258,13 @@ async def run_strix_scan(
     if tracer is not None and hasattr(tracer, "hydrate_from_run_dir"):
         tracer.hydrate_from_run_dir()
 
+    # Wire the per-agent todo store to ``{run_dir}/todos.json`` (mirrored
+    # on every CRUD) and reload any prior todos so respawned subagents
+    # find their lists intact.
+    from strix.tools.todo.tools import hydrate_todos_from_disk
+
+    hydrate_todos_from_disk(run_dir)
+
     root_id: str | None = None
     if is_resume:
         try:
@@ -402,6 +409,27 @@ async def run_strix_scan(
 
         initial_input: Any = [] if is_resume else _build_root_task(scan_config)
 
+        # Resume + new ``--instruction``: SDK replay drives root from
+        # session.db with ``initial_input=[]``, so a brand-new instruction
+        # passed on the resume CLI would otherwise be silently ignored.
+        # Inject it as a fresh user message in root's inbox; the
+        # ``inject_messages_filter`` will surface it on the very next turn.
+        resume_instruction = str(scan_config.get("resume_instruction") or "").strip()
+        if is_resume and resume_instruction:
+            await bus.send(
+                root_id,
+                {
+                    "from": "user",
+                    "type": "instruction",
+                    "priority": "high",
+                    "content": resume_instruction,
+                },
+            )
+            logger.info(
+                "Resume: injected new instruction into root inbox (len=%d)",
+                len(resume_instruction),
+            )
+
         return await run_with_continuation(
             agent=root_agent,
             initial_input=initial_input,
@@ -468,6 +496,9 @@ async def _respawn_subagents(
             if status in {"running", "waiting", "llm_failed"}
             and bus.parent_of.get(aid) is not None
             and aid != root_id
+            # Honour a previously-issued graceful stop — the user clicked
+            # "stop" before the crash; don't respawn what they cancelled.
+            and aid not in bus.stopping
         ]
 
     for child_id, name, parent_id, md in candidates:

@@ -46,9 +46,11 @@ class ScanArtifactWriter:
         *,
         vulnerability_reports: list[dict[str, Any]],
         final_scan_result: str | None,
+        run_metadata: dict[str, Any] | None = None,
     ) -> None:
         """Write any new vulnerability MDs + rewrite the CSV index +
-        write the executive penetration-test report if available.
+        write the executive penetration-test report if available + dump
+        ``run_metadata.json`` for resume hydration.
 
         Tolerant of OSError / RuntimeError — logs and swallows so a
         cleanup failure can't prevent the next scan from finishing.
@@ -61,6 +63,12 @@ class ScanArtifactWriter:
 
             if vulnerability_reports:
                 self._write_vulnerabilities(vulnerability_reports)
+
+            if run_metadata is not None:
+                _atomic_write_text(
+                    self._run_dir / "run_metadata.json",
+                    json.dumps(run_metadata, ensure_ascii=False, indent=2, default=str),
+                )
 
             logger.info("📊 Essential scan data saved to: %s", self._run_dir)
         except (OSError, RuntimeError):

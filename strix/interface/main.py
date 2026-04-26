@@ -415,6 +415,11 @@ Examples:
         except Exception as e:
             parser.error(f"Failed to read instruction file '{instruction_path}': {e}")
 
+    # Capture before ``_load_resume_state`` overrides — used by the resume
+    # path in ``run_strix_scan`` to decide whether to inject the new
+    # instruction into the root's bus inbox after session replay.
+    args.user_explicit_instruction = args.instruction if args.resume else None
+
     if args.resume:
         if args.target:
             parser.error(
@@ -422,6 +427,14 @@ Examples:
                 "the prior run left off, including the original target list."
             )
         _load_resume_state(args, parser)
+        bus_path = Path("strix_runs") / args.resume / "bus.json"
+        if not bus_path.exists():
+            parser.error(
+                f"--resume {args.resume}: missing {bus_path}. The run was "
+                f"persisted but never reached its first bus snapshot — "
+                f"there's nothing to resume from. Pick a fresh --run-name "
+                f"or remove --resume to start over with the same targets."
+            )
     else:
         if not args.target:
             parser.error(
@@ -498,6 +511,26 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
     args.targets_info = state.get("targets_info") or []
     if not args.targets_info:
         parser.error(f"--resume {args.resume}: scan_state.json has no targets_info")
+
+    # Validate any persisted ``cloned_repo_path`` still exists on disk.
+    # The resume path skips re-cloning, so a missing dir would mean the
+    # container mounts an empty source tree and agents silently scan
+    # nothing.
+    for target in args.targets_info:
+        if not isinstance(target, dict):
+            continue
+        details = target.get("details") or {}
+        if target.get("type") != "repository":
+            continue
+        cloned = details.get("cloned_repo_path")
+        if not cloned:
+            continue
+        if not Path(cloned).expanduser().exists():
+            parser.error(
+                f"--resume {args.resume}: cloned repo at {cloned} is missing. "
+                f"It was deleted between runs. Pick a fresh --run-name to "
+                f"re-clone, or restore the directory before resuming."
+            )
 
     if args.instruction is None:
         args.instruction = state.get("instruction")
