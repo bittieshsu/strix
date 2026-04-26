@@ -20,14 +20,6 @@ class ToolTUIRegistry:
     def get_renderer(cls, tool_name: str) -> type[BaseToolRenderer] | None:
         return cls._renderers.get(tool_name)
 
-    @classmethod
-    def list_tools(cls) -> list[str]:
-        return list(cls._renderers.keys())
-
-    @classmethod
-    def has_renderer(cls, tool_name: str) -> bool:
-        return tool_name in cls._renderers
-
 
 def register_tool_renderer(renderer_class: type[BaseToolRenderer]) -> type[BaseToolRenderer]:
     ToolTUIRegistry.register(renderer_class)

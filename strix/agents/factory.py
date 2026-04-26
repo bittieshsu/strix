@@ -250,14 +250,11 @@ def make_child_factory(
     interactive: bool = False,
     system_prompt_context: dict[str, Any] | None = None,
 ) -> Any:
-    """Return a callable suitable for ``ctx.context['agent_factory']``.
+    """Return the runner-owned builder used by ``spawn_child_agent``.
 
-    The ``create_agent`` graph tool reads
-    ``ctx.context['agent_factory']`` and calls it with ``name=`` and
-    ``skills=`` to build a child ``Agent``. Run-level arguments
-    (``scan_mode``, ``is_whitebox``, etc.) are captured in a closure so
-    each child inherits the scan-level configuration without
-    ``create_agent`` having to know about them.
+    Run-level arguments (``scan_mode``, ``is_whitebox``, etc.) are
+    captured in a closure so each child inherits scan-level configuration
+    without the graph tool knowing about runner internals.
     """
 
     def _factory(*, name: str, skills: list[str]) -> SandboxAgent[Any]:

@@ -1,15 +1,11 @@
 import re
 from functools import cache
-from typing import Any, ClassVar
+from typing import Any
 
 from pygments.lexers import get_lexer_by_name, guess_lexer
 from pygments.styles import get_style_by_name
 from pygments.util import ClassNotFound
 from rich.text import Text
-from textual.widgets import Static
-
-from .base_renderer import BaseToolRenderer
-from .registry import register_tool_renderer
 
 
 _BLANK_LINE_RUNS = re.compile(r"\n\s*\n")
@@ -164,22 +160,7 @@ def _process_inline_formatting(line: str) -> Text:
     return result
 
 
-@register_tool_renderer
-class AgentMessageRenderer(BaseToolRenderer):
-    tool_name: ClassVar[str] = "agent_message"
-    css_classes: ClassVar[list[str]] = ["chat-message", "agent-message"]
-
-    @classmethod
-    def render(cls, tool_data: dict[str, Any]) -> Static:
-        content = tool_data.get("content", "")
-
-        if not content:
-            return Static(Text(), classes=" ".join(cls.css_classes))
-
-        styled_text = _apply_markdown_styles(content)
-
-        return Static(styled_text, classes=" ".join(cls.css_classes))
-
+class AgentMessageRenderer:
     @classmethod
     def render_simple(cls, content: str) -> Text:
         if not content:

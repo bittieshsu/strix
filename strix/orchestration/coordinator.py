@@ -163,22 +163,6 @@ class AgentCoordinator:
         items = await session.get_items()
         return count, list(items[-count:])
 
-    async def session_items_snapshot(self) -> dict[str, list[Any]]:
-        async with self._lock:
-            sessions = {
-                aid: runtime.session
-                for aid, runtime in self.runtimes.items()
-                if runtime.session is not None
-            }
-
-        snapshots: dict[str, list[Any]] = {}
-        for aid, session in sessions.items():
-            try:
-                snapshots[aid] = list(await session.get_items())
-            except Exception:
-                logger.exception("failed to read SDK session items for %s", aid)
-        return snapshots
-
     async def request_stop(self, agent_id: str) -> None:
         async with self._lock:
             if agent_id not in self.statuses:

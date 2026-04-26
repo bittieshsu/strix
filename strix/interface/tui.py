@@ -33,6 +33,7 @@ from textual.widgets import Button, Label, Static, TextArea, Tree
 from textual.widgets.tree import TreeNode
 
 from strix.config import load_settings
+from strix.interface.tool_components import render_tool_widget
 from strix.interface.tool_components.agent_message_renderer import AgentMessageRenderer
 from strix.interface.tool_components.user_message_renderer import UserMessageRenderer
 from strix.interface.utils import build_tui_stats_text
@@ -642,13 +643,14 @@ class VulnerabilitiesPanel(VerticalScroll):  # type: ignore[misc]
 
 
 class TuiLiveView:
-    """UI-owned projection of coordinator state and SDK session items."""
+    """UI-owned projection of agent state plus SDK stream events."""
 
     def __init__(self) -> None:
         self.agents: dict[str, dict[str, Any]] = {}
-        self.chat_messages: list[dict[str, Any]] = []
-        self._next_message_id = 1
-        self._session_message_keys: dict[tuple[str, int], dict[str, Any]] = {}
+        self.events: list[dict[str, Any]] = []
+        self._next_event_id = 1
+        self._open_assistant_event_by_agent: dict[str, dict[str, Any]] = {}
+        self._tool_event_by_call_id: dict[str, dict[str, Any]] = {}
 
     def hydrate_from_run_dir(self, run_dir: Path) -> None:
         agents_path = run_dir / "agents.json"
@@ -704,74 +706,193 @@ class TuiLiveView:
             current["error_message"] = error_message
         current["updated_at"] = now
 
-    def sync_agent_messages_from_items(self, agent_id: str, items: list[Any]) -> None:
-        other_agents = [m for m in self.chat_messages if m.get("agent_id") != agent_id]
-        refreshed: list[dict[str, Any]] = []
+    def record_user_message(self, agent_id: str, content: str) -> None:
+        self._append_event(
+            agent_id,
+            "chat",
+            {
+                "role": "user",
+                "content": content,
+                "metadata": {"source": "tui_user"},
+            },
+        )
 
-        for index, item in enumerate(items):
-            converted = _sdk_item_to_chat_message(item)
-            if converted is None:
-                continue
+    def ingest_sdk_event(self, agent_id: str, event: Any) -> None:
+        event_type = getattr(event, "type", "")
+        if event_type == "raw_response_event":
+            self._ingest_raw_response_event(agent_id, getattr(event, "data", None))
+            return
+        if event_type != "run_item_stream_event":
+            return
 
-            key = (agent_id, index)
-            existing = self._session_message_keys.get(key)
-            if existing is None:
-                existing = {
-                    "message_id": self._next_message_id,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                }
-                self._next_message_id += 1
-                self._session_message_keys[key] = existing
+        item = getattr(event, "item", None)
+        item_type = getattr(item, "type", "")
+        if item_type == "message_output_item":
+            self._record_assistant_message(agent_id, _sdk_message_text(item), final=True)
+        elif item_type == "tool_call_item":
+            self._record_tool_call(agent_id, item)
+        elif item_type == "tool_call_output_item":
+            self._record_tool_output(agent_id, item)
 
-            refreshed.append(
+    def events_for_agent(self, agent_id: str) -> list[dict[str, Any]]:
+        return [event for event in self.events if event.get("agent_id") == agent_id]
+
+    def has_events_for_agent(self, agent_id: str) -> bool:
+        return any(event.get("agent_id") == agent_id for event in self.events)
+
+    def _ingest_raw_response_event(self, agent_id: str, data: Any) -> None:
+        data_type = getattr(data, "type", "")
+        if data_type == "response.output_text.delta":
+            delta = getattr(data, "delta", "")
+            if delta:
+                self._record_assistant_message(agent_id, str(delta), final=False)
+
+    def _record_assistant_message(self, agent_id: str, content: str, *, final: bool) -> None:
+        if not content:
+            return
+        existing = self._open_assistant_event_by_agent.get(agent_id)
+        if existing is None:
+            event = self._append_event(
+                agent_id,
+                "chat",
                 {
-                    "message_id": existing["message_id"],
-                    "content": converted["content"],
-                    "role": converted["role"],
-                    "agent_id": agent_id,
-                    "timestamp": existing["timestamp"],
-                    "metadata": {"source": "sdk_session", "session_index": index},
-                }
+                    "role": "assistant",
+                    "content": content,
+                    "metadata": {"source": "sdk_stream", "streaming": not final},
+                },
             )
+            if not final:
+                self._open_assistant_event_by_agent[agent_id] = event
+            return
 
-        self.chat_messages = other_agents + refreshed
-
-
-def _sdk_item_to_chat_message(item: Any) -> dict[str, str] | None:
-    if not isinstance(item, dict):
-        if hasattr(item, "model_dump"):
-            item = item.model_dump(exclude_unset=True)
+        data = existing["data"]
+        if final:
+            data["content"] = content
+            data["metadata"]["streaming"] = False
+            self._open_assistant_event_by_agent.pop(agent_id, None)
         else:
-            return None
+            data["content"] = f"{data.get('content', '')}{content}"
+        self._bump_event(existing)
 
-    role = item.get("role")
-    if role not in {"user", "assistant"}:
-        return None
+    def _record_tool_call(self, agent_id: str, item: Any) -> None:
+        call = _sdk_tool_call_data(item)
+        call_id = call["call_id"]
+        existing = self._tool_event_by_call_id.get(call_id)
+        tool_data = {
+            "tool_name": call["tool_name"],
+            "args": call["args"],
+            "status": "running",
+            "agent_id": agent_id,
+            "call_id": call_id,
+        }
+        if existing is None:
+            event = self._append_event(agent_id, "tool", tool_data)
+            self._tool_event_by_call_id[call_id] = event
+        else:
+            existing["data"].update(tool_data)
+            self._bump_event(existing)
 
-    content = _extract_sdk_text(item.get("content"))
-    if not content:
-        return None
-    return {"role": str(role), "content": content}
+    def _record_tool_output(self, agent_id: str, item: Any) -> None:
+        output = _sdk_tool_output_data(item)
+        call_id = output["call_id"]
+        event = self._tool_event_by_call_id.get(call_id)
+        if event is None:
+            event = self._append_event(
+                agent_id,
+                "tool",
+                {
+                    "tool_name": output["tool_name"],
+                    "args": {},
+                    "status": "completed",
+                    "agent_id": agent_id,
+                    "call_id": call_id,
+                },
+            )
+            self._tool_event_by_call_id[call_id] = event
+
+        result = _parse_json_value(output["output"])
+        event["data"]["result"] = result
+        event["data"]["status"] = _tool_status_from_result(result)
+        self._bump_event(event)
+
+    def _append_event(self, agent_id: str, event_type: str, data: dict[str, Any]) -> dict[str, Any]:
+        event = {
+            "id": f"{event_type}_{self._next_event_id}",
+            "type": event_type,
+            "agent_id": agent_id,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "version": 0,
+            "data": data,
+        }
+        self._next_event_id += 1
+        self.events.append(event)
+        return event
+
+    @staticmethod
+    def _bump_event(event: dict[str, Any]) -> None:
+        event["version"] = int(event.get("version", 0)) + 1
+        event["timestamp"] = datetime.now(UTC).isoformat()
 
 
-def _extract_sdk_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-            elif isinstance(part, dict):
-                text = part.get("text") or part.get("content")
-                if isinstance(text, str):
-                    parts.append(text)
-            else:
-                text = getattr(part, "text", None) or getattr(part, "content", None)
-                if isinstance(text, str):
-                    parts.append(text)
-        return "\n".join(p for p in parts if p)
-    return ""
+def _sdk_tool_call_data(item: Any) -> dict[str, Any]:
+    raw = getattr(item, "raw_item", None)
+    call_id = str(_raw_field(raw, "call_id") or _raw_field(raw, "id") or id(item))
+    tool_name = str(
+        _raw_field(raw, "name") or _raw_field(raw, "type") or getattr(item, "title", None) or "tool"
+    )
+    return {
+        "call_id": call_id,
+        "tool_name": tool_name,
+        "args": _parse_json_object(_raw_field(raw, "arguments")),
+    }
+
+
+def _sdk_tool_output_data(item: Any) -> dict[str, Any]:
+    raw = getattr(item, "raw_item", None)
+    call_id = str(_raw_field(raw, "call_id") or _raw_field(raw, "id") or id(item))
+    return {
+        "call_id": call_id,
+        "tool_name": str(_raw_field(raw, "name") or _raw_field(raw, "type") or "tool"),
+        "output": getattr(item, "output", _raw_field(raw, "output")),
+    }
+
+
+def _sdk_message_text(item: Any) -> str:
+    raw = getattr(item, "raw_item", None)
+    content = _raw_field(raw, "content", [])
+    parts: list[str] = []
+    content_items = content if isinstance(content, list) else [content]
+    for part in content_items:
+        text = _raw_field(part, "text")
+        if isinstance(text, str):
+            parts.append(text)
+    return "".join(parts)
+
+
+def _raw_field(raw: Any, key: str, default: Any = None) -> Any:
+    if isinstance(raw, dict):
+        return raw.get(key, default)
+    return getattr(raw, key, default)
+
+
+def _parse_json_object(value: Any) -> dict[str, Any]:
+    parsed = _parse_json_value(value)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _parse_json_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _tool_status_from_result(result: Any) -> str:
+    if isinstance(result, dict) and result.get("success") is False:
+        return "failed"
+    return "completed"
 
 
 class QuitScreen(ModalScreen):  # type: ignore[misc]
@@ -845,7 +966,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         set_global_scan_store(self.scan_store)
         self.live_view = TuiLiveView()
         self.live_view.hydrate_from_run_dir(self.scan_store.get_run_dir())
-        self._live_sync_future: Any | None = None
+        self._agent_graph_sync_future: Any | None = None
 
         # Pre-create the coordinator here so the TUI can route stop/chat
         # commands while the scan loop runs in a worker thread.
@@ -1041,19 +1162,14 @@ class StrixTUIApp(App):  # type: ignore[misc]
         except (ValueError, Exception):
             return
 
-        self._sync_live_view()
+        self._sync_agent_graph()
 
-        agent_updates = False
         for agent_id, agent_data in list(self.live_view.agents.items()):
             if agent_id not in self._displayed_agents:
                 self._add_agent_node(agent_data)
                 self._displayed_agents.add(agent_id)
-                agent_updates = True
-            elif self._update_agent_node(agent_id, agent_data):
-                agent_updates = True
-
-        if agent_updates:
-            self._expand_new_agent_nodes()
+            else:
+                self._update_agent_node(agent_id, agent_data)
 
         self._update_chat_view()
 
@@ -1063,21 +1179,21 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
         self._update_vulnerabilities_panel()
 
-    def _sync_live_view(self) -> None:
-        future = self._live_sync_future
+    def _sync_agent_graph(self) -> None:
+        future = self._agent_graph_sync_future
         if future is not None:
             if not future.done():
                 if self._scan_loop is not None and self._scan_loop.is_closed():
                     future.cancel()
-                    self._live_sync_future = None
+                    self._agent_graph_sync_future = None
                 else:
                     return
             else:
-                self._live_sync_future = None
+                self._agent_graph_sync_future = None
                 try:
-                    parent_of, statuses, names, session_items = future.result()
+                    parent_of, statuses, names = future.result()
                 except Exception:
-                    logger.exception("TUI live-view sync failed")
+                    logger.exception("TUI agent graph sync failed")
                 else:
                     for agent_id, status in statuses.items():
                         self.live_view.upsert_agent(
@@ -1086,19 +1202,14 @@ class StrixTUIApp(App):  # type: ignore[misc]
                             parent_id=parent_of.get(agent_id),
                             status=status,
                         )
-                    for agent_id, items in session_items.items():
-                        self.live_view.sync_agent_messages_from_items(agent_id, items)
+
         if self._scan_loop is None or self._scan_loop.is_closed():
             return
 
-        async def collect() -> tuple[
-            dict[str, str | None], dict[str, Any], dict[str, str], dict[str, list[Any]]
-        ]:
-            parent_of, statuses, names = await self.coordinator.graph_snapshot()
-            session_items = await self.coordinator.session_items_snapshot()
-            return parent_of, statuses, names, session_items
+        async def collect() -> tuple[dict[str, str | None], dict[str, Any], dict[str, str]]:
+            return await self.coordinator.graph_snapshot()
 
-        self._live_sync_future = asyncio.run_coroutine_threadsafe(collect(), self._scan_loop)
+        self._agent_graph_sync_future = asyncio.run_coroutine_threadsafe(collect(), self._scan_loop)
 
     def _update_agent_node(self, agent_id: str, agent_data: dict[str, Any]) -> bool:
         if agent_id not in self.agent_nodes:
@@ -1146,7 +1257,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 "Starting agent...", "placeholder-no-activity"
             )
 
-        current_event_ids = [e["id"] for e in events]
+        current_event_ids = [f"{e['id']}:{e.get('version', 0)}" for e in events]
         if current_event_ids == self._displayed_events:
             return None, None
 
@@ -1251,6 +1362,8 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
             if event["type"] == "chat":
                 content = self._render_chat_content(event["data"])
+            elif event["type"] == "tool":
+                content = render_tool_widget(event["data"])
 
             if content:
                 if renderables:
@@ -1484,7 +1597,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
             self._spinner_frame_index = 0
 
     def _agent_has_real_activity(self, agent_id: str) -> bool:
-        return any(msg.get("agent_id") == agent_id for msg in self.live_view.chat_messages)
+        return self.live_view.has_events_for_agent(agent_id)
 
     def _agent_vulnerability_count(self, agent_id: str) -> int:
         return sum(
@@ -1492,19 +1605,9 @@ class StrixTUIApp(App):  # type: ignore[misc]
         )
 
     def _gather_agent_events(self, agent_id: str) -> list[dict[str, Any]]:
-        chat_events = [
-            {
-                "type": "chat",
-                "timestamp": msg["timestamp"],
-                "id": f"chat_{msg['message_id']}",
-                "data": msg,
-            }
-            for msg in self.live_view.chat_messages
-            if msg.get("agent_id") == agent_id
-        ]
-
-        chat_events.sort(key=lambda e: (e["timestamp"], e["id"]))
-        return chat_events
+        events = self.live_view.events_for_agent(agent_id)
+        events.sort(key=lambda e: (e["timestamp"], e["id"]))
+        return events
 
     def watch_selected_agent_id(self, _agent_id: str | None) -> None:
         if len(self.screen_stack) > 1 or self.show_splash:
@@ -1539,6 +1642,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                                 local_sources=getattr(self.args, "local_sources", None) or [],
                                 coordinator=self.coordinator,
                                 interactive=True,
+                                event_sink=self._capture_sdk_event,
                             ),
                         )
 
@@ -1569,6 +1673,15 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
         self._scan_thread = threading.Thread(target=scan_target, daemon=True)
         self._scan_thread.start()
+
+    def _capture_sdk_event(self, agent_id: str, event: Any) -> None:
+        try:
+            self.call_from_thread(self._record_sdk_event, agent_id, event)
+        except RuntimeError:
+            self._record_sdk_event(agent_id, event)
+
+    def _record_sdk_event(self, agent_id: str, event: Any) -> None:
+        self.live_view.ingest_sdk_event(agent_id, event)
 
     def _add_agent_node(self, agent_data: dict[str, Any]) -> None:
         if len(self.screen_stack) > 1 or self.show_splash:
@@ -1626,32 +1739,6 @@ class StrixTUIApp(App):  # type: ignore[misc]
             self._reorganize_orphaned_agents(agent_id)
         except (AttributeError, ValueError, RuntimeError) as e:
             logger.warning(f"Failed to add agent node {agent_id}: {e}")
-
-    def _expand_new_agent_nodes(self) -> None:
-        if len(self.screen_stack) > 1 or self.show_splash:
-            return
-
-        if not self.is_mounted:
-            return
-
-    def _expand_all_agent_nodes(self) -> None:
-        if len(self.screen_stack) > 1 or self.show_splash:
-            return
-
-        if not self.is_mounted:
-            return
-
-        try:
-            agents_tree = self.query_one("#agents_tree", Tree)
-            self._expand_node_recursively(agents_tree.root)
-        except (ValueError, Exception):
-            logger.debug("Tree not ready for expanding nodes")
-
-    def _expand_node_recursively(self, node: TreeNode) -> None:
-        if not node.is_expanded:
-            node.expand()
-        for child in node.children:
-            self._expand_node_recursively(child)
 
     def _copy_node_under(self, node_to_copy: TreeNode, new_parent: TreeNode) -> None:
         agent_id = node_to_copy.data["agent_id"]
@@ -1775,10 +1862,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
             self.selected_agent_id,
             len(message),
         )
+        target_agent_id = self.selected_agent_id
+        self.live_view.record_user_message(target_agent_id, message)
+
         # Route to the agent's SDK session. The coordinator also interrupts
         # any active stream so the message is picked up on the next run cycle.
         if self._scan_loop is not None and not self._scan_loop.is_closed():
-            target_agent_id = self.selected_agent_id
             asyncio.run_coroutine_threadsafe(
                 self.coordinator.send(
                     target_agent_id,

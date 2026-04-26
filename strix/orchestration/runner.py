@@ -12,6 +12,7 @@ import contextlib
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -43,6 +44,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+StreamEventSink = Callable[[str, Any], None]
+
 
 def _open_agent_session(agent_id: str, path: Path) -> SQLiteSession:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,6 +64,7 @@ async def _run_agent_loop(
     interactive: bool,
     session: Session | None = None,
     start_parked: bool = False,
+    event_sink: StreamEventSink | None = None,
 ) -> RunResultBase | None:
     await coordinator.attach_runtime(
         agent_id,
@@ -80,6 +84,7 @@ async def _run_agent_loop(
             max_turns=max_turns,
             session=session,
             interactive=interactive,
+            event_sink=event_sink,
         )
 
     if not interactive:
@@ -102,6 +107,7 @@ async def _run_agent_loop(
             max_turns=max_turns,
             session=session,
             interactive=interactive,
+            event_sink=event_sink,
         )
 
 
@@ -116,6 +122,7 @@ async def _run_cycle(
     max_turns: int,
     session: Session | None,
     interactive: bool,
+    event_sink: StreamEventSink | None,
 ) -> RunResultBase | None:
     try:
         await coordinator.mark_running(agent_id)
@@ -129,8 +136,12 @@ async def _run_cycle(
         )
         await coordinator.attach_stream(agent_id, stream)
         try:
-            async for _event in stream.stream_events():
-                pass
+            async for event in stream.stream_events():
+                if event_sink is not None:
+                    try:
+                        event_sink(agent_id, event)
+                    except Exception:
+                        logger.exception("stream event sink failed for %s", agent_id)
             if stream.run_loop_exception is not None:
                 raise stream.run_loop_exception
         finally:
@@ -209,6 +220,7 @@ async def _spawn_child_agent(
     task: str,
     skills: list[str],
     parent_history: list[Any],
+    event_sink: StreamEventSink | None = None,
 ) -> dict[str, Any]:
     parent_id = parent_ctx.get("agent_id")
     if not isinstance(parent_id, str):
@@ -244,6 +256,7 @@ async def _spawn_child_agent(
             task=task,
             parent_history=parent_history,
         ),
+        event_sink=event_sink,
     )
 
     return {
@@ -271,6 +284,7 @@ async def _start_child_runner(
     task: str,
     initial_input: Any,
     start_parked: bool = False,
+    event_sink: StreamEventSink | None = None,
 ) -> None:
     session = _open_agent_session(child_id, agents_db_path)
     sessions_to_close.append(session)
@@ -293,6 +307,7 @@ async def _start_child_runner(
             interactive=interactive,
             session=session,
             start_parked=start_parked,
+            event_sink=event_sink,
         ),
         name=f"agent-{name}-{child_id}",
     )
@@ -310,6 +325,7 @@ async def run_strix_scan(
     max_turns: int = DEFAULT_MAX_TURNS,
     model: str | None = None,
     cleanup_on_exit: bool = True,
+    event_sink: StreamEventSink | None = None,
 ) -> RunResultBase | None:
     """Run or resume one Strix scan against a sandbox."""
     if scan_id is None:
@@ -434,7 +450,7 @@ async def run_strix_scan(
                 skills=skills,
             )
 
-        agent_factory = make_child_factory(
+        child_agent_builder = make_child_factory(
             scan_mode=scan_mode,
             is_whitebox=is_whitebox,
             interactive=interactive,
@@ -444,12 +460,13 @@ async def run_strix_scan(
         async def spawn_child_agent(**kwargs: Any) -> dict[str, Any]:
             return await _spawn_child_agent(
                 coordinator=coordinator,
-                factory=agent_factory,
+                factory=child_agent_builder,
                 agents_db_path=agents_db,
                 sessions_to_close=sessions_to_close,
                 run_config=run_config,
                 max_turns=max_turns,
                 interactive=interactive,
+                event_sink=event_sink,
                 **kwargs,
             )
 
@@ -472,7 +489,7 @@ async def run_strix_scan(
         if is_resume:
             await _respawn_subagents(
                 coordinator=coordinator,
-                factory=agent_factory,
+                factory=child_agent_builder,
                 agents_db_path=agents_db,
                 sessions_to_close=sessions_to_close,
                 run_config=run_config,
@@ -480,6 +497,7 @@ async def run_strix_scan(
                 interactive=interactive,
                 parent_ctx=context,
                 root_id=root_id,
+                event_sink=event_sink,
             )
 
         initial_input: Any = [] if is_resume else root_task
@@ -519,6 +537,7 @@ async def run_strix_scan(
             interactive=interactive,
             session=root_session,
             start_parked=bool(interactive and is_resume and root_status != "running"),
+            event_sink=event_sink,
         )
     except BaseException:
         logger.exception("Strix scan %s failed", scan_id)
@@ -559,6 +578,7 @@ async def _respawn_subagents(
     interactive: bool,
     parent_ctx: dict[str, Any],
     root_id: str,
+    event_sink: StreamEventSink | None = None,
 ) -> None:
     """Re-spawn subagent runners from a restored coordinator snapshot.
 
@@ -622,6 +642,7 @@ async def _respawn_subagents(
                 task=str(md.get("task", "")),
                 initial_input=[],
                 start_parked=start_parked,
+                event_sink=event_sink,
             )
             logger.info(
                 "respawned %s (%s) parent=%s task_len=%d",

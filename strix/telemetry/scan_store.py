@@ -33,7 +33,7 @@ class ScanStore:
     persistence. This store keeps only Strix-owned scan artifacts and
     report metadata. Live UI projections belong to the interface layer.
 
-    It is not a trace mirror and does not consume SDK tracing processors.
+    It does not consume SDK tracing processors.
     """
 
     def __init__(self, run_name: str | None = None):
@@ -60,14 +60,6 @@ class ScanStore:
 
         self.caido_url: str | None = None
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
-
-    def set_run_name(self, run_name: str) -> None:
-        self.run_name = run_name
-        self.run_id = run_name
-        self.run_metadata["run_name"] = run_name
-        self.run_metadata["run_id"] = run_name
-        self._run_dir = None
-        self._saved_vuln_ids.clear()
 
     def get_run_dir(self) -> Path:
         if self._run_dir is None:
