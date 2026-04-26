@@ -21,11 +21,12 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any, Literal
 
-from agents import RunContextWrapper, Runner, function_tool
+from agents import RunContextWrapper, function_tool
 from agents.items import TResponseInputItem
 
 from strix.orchestration.hooks import StrixOrchestrationHooks
 from strix.run_config_factory import make_agent_context, make_run_config
+from strix.run_loop import run_with_continuation
 
 
 if TYPE_CHECKING:
@@ -464,13 +465,16 @@ async def create_agent(
     )
 
     task_handle = asyncio.create_task(
-        Runner.run(
-            child_agent,
-            input=initial_input,
+        run_with_continuation(
+            agent=child_agent,
+            initial_input=initial_input,
             run_config=child_run_config,
             context=child_ctx,
             hooks=StrixOrchestrationHooks(),
             max_turns=int(inner.get("max_turns", 300)),
+            bus=bus,
+            agent_id=child_id,
+            interactive=bool(inner.get("interactive", False)),
         ),
         name=f"agent-{name}-{child_id}",
     )

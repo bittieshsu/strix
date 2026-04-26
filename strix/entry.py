@@ -15,13 +15,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from agents import Runner
 from agents.memory import SQLiteSession
 
 from strix.agents.factory import build_strix_agent, make_child_factory
@@ -33,6 +31,7 @@ from strix.run_config_factory import (
     make_agent_context,
     make_run_config,
 )
+from strix.run_loop import run_with_continuation
 from strix.runtime import session_manager
 
 
@@ -284,52 +283,18 @@ async def run_strix_scan(
         session_db.parent.mkdir(parents=True, exist_ok=True)
         session = SQLiteSession(session_id=scan_id, db_path=session_db)
 
-        task_text = _build_root_task(scan_config)
-        hooks = StrixOrchestrationHooks()
-
-        result = await Runner.run(
-            root_agent,
-            input=task_text,
-            session=session,
+        return await run_with_continuation(
+            agent=root_agent,
+            initial_input=_build_root_task(scan_config),
             run_config=run_config,
             context=context,
-            hooks=hooks,
+            hooks=StrixOrchestrationHooks(),
             max_turns=max_turns,
+            bus=bus,
+            agent_id=root_id,
+            interactive=interactive,
+            session=session,
         )
-
-        if not interactive:
-            return result
-
-        # Interactive mode: SDK demo-loop pattern. The root agent is
-        # parked (not finalized) by ``StrixOrchestrationHooks.on_agent_end``
-        # at the end of each cycle, so ``bus.send`` from the TUI still
-        # accepts user messages between cycles. Wake on the next message,
-        # drain it, and re-invoke ``Runner.run`` with the appended input —
-        # the SQLite session preserves the prior conversation, so the
-        # agent picks up with full context.
-        while True:
-            try:
-                await bus.wait_for_message(root_id)
-            except asyncio.CancelledError:
-                return result
-            pending = await bus.drain(root_id)
-            if not pending:
-                continue
-            next_input = "\n\n".join(
-                str(msg.get("content", "")).strip() for msg in pending if msg.get("content")
-            )
-            if not next_input:
-                continue
-
-            result = await Runner.run(
-                root_agent,
-                input=next_input,
-                session=session,
-                run_config=run_config,
-                context=context,
-                hooks=hooks,
-                max_turns=max_turns,
-            )
     except BaseException:
         # Cancel any descendant tasks the root spawned before unwinding.
         # cancel_descendants is idempotent and handles the empty-tree case.
