@@ -1,7 +1,7 @@
 """Per-agent todo tools.
 
 Per-agent in-memory dict, scoped via ``ctx.context['agent_id']``. The
-table is mirrored to ``{run_dir}/todos.json`` after every mutation so a
+table is mirrored to ``{state_dir}/todos.json`` after every mutation so a
 process restart can ``hydrate_todos_from_disk`` and each respawned
 agent finds its prior list intact. The persistence is best-effort —
 errors are logged and swallowed so a disk failure can't kill the agent
@@ -54,8 +54,8 @@ _todos_path: Path | None = None
 _todos_io_lock = threading.RLock()
 
 
-def hydrate_todos_from_disk(run_dir: Path) -> None:
-    """Wire the on-disk mirror at ``{run_dir}/todos.json`` and reload it.
+def hydrate_todos_from_disk(state_dir: Path) -> None:
+    """Wire the on-disk mirror at ``{state_dir}/todos.json`` and reload it.
 
     Called by :func:`run_strix_scan` once at scan setup. Subsequent CRUD
     calls auto-persist after every mutation. Idempotent on missing file.
@@ -63,7 +63,7 @@ def hydrate_todos_from_disk(run_dir: Path) -> None:
     the scan over a broken sidecar artifact.
     """
     global _todos_path  # noqa: PLW0603
-    _todos_path = run_dir / "todos.json"
+    _todos_path = state_dir / "todos.json"
     with _todos_io_lock:
         _todos_storage.clear()
         if not _todos_path.exists():
@@ -99,7 +99,7 @@ def hydrate_todos_from_disk(run_dir: Path) -> None:
 
 
 def _persist() -> None:
-    """Atomic-rename mirror of ``_todos_storage`` → ``{run_dir}/todos.json``.
+    """Atomic-rename mirror of ``_todos_storage`` → ``{state_dir}/todos.json``.
 
     No-op when ``_todos_path`` isn't wired (tests). Errors are logged
     and swallowed.

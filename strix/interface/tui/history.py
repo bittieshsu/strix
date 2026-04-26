@@ -8,6 +8,8 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from strix.core.paths import runtime_state_dir
+
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -17,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def load_session_history(run_dir: Path, agent_ids: Any) -> list[tuple[str, dict[str, Any], str]]:
-    agents_db = run_dir / "agents.db"
+    agents_db = runtime_state_dir(run_dir) / "agents.db"
     session_ids = [aid for aid in agent_ids if isinstance(aid, str)]
     if not agents_db.exists() or not session_ids:
         return []

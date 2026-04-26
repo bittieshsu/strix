@@ -5,9 +5,9 @@ Strix Agent Interface
 
 import argparse
 import asyncio
-import json
 import shutil
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agents.model_settings import ModelSettings
@@ -24,6 +24,7 @@ from strix.config import (
     persist_current,
 )
 from strix.config.models import configure_sdk_model_defaults, normalize_model_name
+from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.interface.cli import run_cli
 from strix.interface.tui import run_tui
 from strix.interface.utils import (
@@ -42,6 +43,7 @@ from strix.interface.utils import (
     validate_config_file,
 )
 from strix.report.state import get_global_report_state
+from strix.report.writer import read_run_record, write_run_record
 from strix.telemetry import posthog
 from strix.telemetry.logging import configure_dependency_logging
 
@@ -433,7 +435,7 @@ Examples:
                 "the prior run left off, including the original target list."
             )
         _load_resume_state(args, parser)
-        agents_path = Path("strix_runs") / args.resume / "agents.json"
+        agents_path = runtime_state_dir(run_dir_for(args.resume)) / "agents.json"
         if not agents_path.exists():
             parser.error(
                 f"--resume {args.resume}: missing {agents_path}. The run was "
@@ -469,17 +471,16 @@ Examples:
     return args
 
 
-def _persist_scan_state(args: argparse.Namespace) -> None:
-    """Dump the resolved scan inputs to ``{run_dir}/scan_state.json``.
-
-    Called once at the end of fresh-run setup. ``--resume <run_name>`` on
-    a future invocation reads this file to repopulate targets, scan_mode,
-    instruction, local_sources, and diff_scope without the user having to
-    retype them.
-    """
-    run_dir = Path("strix_runs") / args.run_name
+def _persist_run_record(args: argparse.Namespace) -> None:
+    """Write the single public run descriptor used by resume and reporting."""
+    run_dir = run_dir_for(args.run_name)
     run_dir.mkdir(parents=True, exist_ok=True)
-    state = {
+    run_record = {
+        "run_id": args.run_name,
+        "run_name": args.run_name,
+        "status": "running",
+        "start_time": datetime.now(UTC).isoformat(),
+        "end_time": None,
         "targets_info": args.targets_info,
         "scan_mode": args.scan_mode,
         "instruction": args.instruction,
@@ -489,34 +490,26 @@ def _persist_scan_state(args: argparse.Namespace) -> None:
         "scope_mode": args.scope_mode,
         "diff_base": args.diff_base,
     }
-    (run_dir / "scan_state.json").write_text(
-        json.dumps(state, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    write_run_record(run_dir, run_record)
 
 
 def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    """Populate ``args.targets_info`` and friends from a prior run's scan state.
-
-    Reads ``strix_runs/<run_name>/scan_state.json`` written at the end of the
-    fresh-run setup in ``main()``. Only fields the user did not explicitly
-    set on this invocation are restored — passing ``--instruction`` on
-    resume, for example, overrides the persisted instruction.
-    """
-    state_path = Path("strix_runs") / args.resume / "scan_state.json"
+    """Populate ``args.targets_info`` and friends from a prior run's run.json."""
+    run_dir = run_dir_for(args.resume)
+    state_path = run_dir / "run.json"
     if not state_path.exists():
         parser.error(
             f"--resume {args.resume}: no such run "
             f"(missing {state_path}; remove --resume for a fresh start)"
         )
     try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        parser.error(f"--resume {args.resume}: scan_state.json unreadable: {exc}")
+        state = read_run_record(run_dir)
+    except RuntimeError as exc:
+        parser.error(f"--resume {args.resume}: run.json unreadable: {exc}")
 
     args.targets_info = state.get("targets_info") or []
     if not args.targets_info:
-        parser.error(f"--resume {args.resume}: scan_state.json has no targets_info")
+        parser.error(f"--resume {args.resume}: run.json has no targets_info")
 
     # Validate any persisted ``cloned_repo_path`` still exists on disk.
     # The resume path skips re-cloning, so a missing dir would mean the
@@ -540,8 +533,6 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
 
     if args.instruction is None:
         args.instruction = state.get("instruction")
-    if state.get("instruction_file") and args.instruction_file is None:
-        args.instruction_file = state.get("instruction_file")
     if state.get("local_sources"):
         args.local_sources = state.get("local_sources")
     if state.get("diff_scope"):
@@ -561,8 +552,8 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     report_state = get_global_report_state()
 
     scan_completed = False
-    if report_state and report_state.scan_results:
-        scan_completed = report_state.scan_results.get("scan_completed", False)
+    if report_state:
+        scan_completed = report_state.run_record.get("status") == "completed"
 
     completion_text = Text()
     if scan_completed:
@@ -739,10 +730,10 @@ def main() -> None:
             else:
                 args.instruction = diff_scope.instruction_block
 
-        # Persist the fully-resolved scan state so a future
+        # Persist the fully-resolved run descriptor so a future
         # ``--resume <run_name>`` invocation can pick up without
         # re-supplying targets / instructions / scope.
-        _persist_scan_state(args)
+        _persist_run_record(args)
 
     posthog.start(
         model=load_settings().llm.model,
@@ -767,9 +758,14 @@ def main() -> None:
     finally:
         report_state = get_global_report_state()
         if report_state:
+            status = {"interrupted": "interrupted", "error": "failed"}.get(
+                exit_reason,
+                "stopped",
+            )
+            report_state.cleanup(status=status)
             posthog.end(report_state, exit_reason=exit_reason)
 
-    results_path = Path("strix_runs") / args.run_name
+    results_path = run_dir_for(args.run_name)
     display_completion_message(args, results_path)
 
     if args.non_interactive:

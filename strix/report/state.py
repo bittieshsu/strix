@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-from strix.report.writer import write_executive_report, write_run_metadata, write_vulnerabilities
+from strix.core.paths import run_dir_for
+from strix.report.writer import (
+    read_run_record,
+    write_executive_report,
+    write_run_record,
+    write_vulnerabilities,
+)
 from strix.telemetry import posthog
 
 
@@ -45,13 +51,13 @@ class ReportState:
 
         self.scan_results: dict[str, Any] | None = None
         self.scan_config: dict[str, Any] | None = None
-        self.run_metadata: dict[str, Any] = {
+        self.run_record: dict[str, Any] = {
             "run_id": self.run_id,
             "run_name": self.run_name,
             "start_time": self.start_time,
             "end_time": None,
-            "targets": [],
             "status": "running",
+            "targets_info": [],
         }
         self._run_dir: Path | None = None
         self._saved_vuln_ids: set[str] = set()
@@ -61,28 +67,22 @@ class ReportState:
 
     def get_run_dir(self) -> Path:
         if self._run_dir is None:
-            runs_dir = Path.cwd() / "strix_runs"
-            runs_dir.mkdir(exist_ok=True)
-
             run_dir_name = self.run_name if self.run_name else self.run_id
-            self._run_dir = runs_dir / run_dir_name
-            self._run_dir.mkdir(exist_ok=True)
+            self._run_dir = run_dir_for(run_dir_name)
+            self._run_dir.mkdir(parents=True, exist_ok=True)
 
         return self._run_dir
 
     def hydrate_from_run_dir(self) -> None:
         """Reload prior-scan state from ``{run_dir}/`` for resume.
 
-        Called by :func:`run_strix_scan` before any new agent runs.
         Restores:
 
         - ``vulnerability_reports`` from ``vulnerabilities.json`` so
           :meth:`add_vulnerability_report` doesn't allocate a colliding
           ``vuln-0001`` and overwrite the prior on-disk MD.
-        - ``run_metadata`` (start_time, run_id, targets, status) from
-          ``run_metadata.json`` so audit-trail timestamps + the final
-          report's duration calc reflect the original scan, not just
-          this resume segment.
+        - ``run_record`` from ``run.json`` so timestamps, run inputs,
+          status, and final report state have one public source of truth.
 
         Idempotent on missing files (fresh runs land here too via the
         same code path). **Raises on corruption** — silently swallowing
@@ -93,25 +93,18 @@ class ReportState:
         """
         run_dir = self.get_run_dir()
 
-        meta_path = run_dir / "run_metadata.json"
-        if meta_path.exists():
-            try:
-                data = json.loads(meta_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                raise RuntimeError(
-                    f"run_metadata.json at {meta_path} is unreadable: {exc}",
-                ) from exc
-            if isinstance(data, dict):
-                if isinstance(data.get("start_time"), str):
-                    self.start_time = data["start_time"]
-                self.run_metadata.update(
-                    {
-                        k: v
-                        for k, v in data.items()
-                        if k in {"run_id", "run_name", "start_time", "targets", "status"}
-                    },
-                )
-                logger.info("scan store hydrated run_metadata from %s", meta_path)
+        data = read_run_record(run_dir)
+        if data:
+            self.run_record.update(data)
+            if isinstance(data.get("start_time"), str):
+                self.start_time = data["start_time"]
+            if isinstance(data.get("end_time"), str):
+                self.end_time = data["end_time"]
+            scan_results = data.get("scan_results")
+            if isinstance(scan_results, dict):
+                self.scan_results = scan_results
+                self.final_scan_result = self._format_final_scan_result(scan_results)
+            logger.info("report state hydrated run.json from %s", run_dir)
 
         json_path = run_dir / "vulnerabilities.json"
         if json_path.exists():
@@ -133,7 +126,8 @@ class ReportState:
                 if isinstance(rid, str):
                     self._saved_vuln_ids.add(rid)
             logger.info(
-                "scan store hydrated %d vulnerability report(s)", len(self.vulnerability_reports)
+                "report state hydrated %d vulnerability report(s)",
+                len(self.vulnerability_reports),
             )
 
     def add_vulnerability_report(
@@ -228,22 +222,8 @@ class ReportState:
             "success": True,
         }
 
-        self.final_scan_result = f"""# Executive Summary
-
-{executive_summary.strip()}
-
-# Methodology
-
-{methodology.strip()}
-
-# Technical Analysis
-
-{technical_analysis.strip()}
-
-# Recommendations
-
-{recommendations.strip()}
-"""
+        self.final_scan_result = self._format_final_scan_result(self.scan_results)
+        self.run_record["scan_results"] = self.scan_results
 
         logger.info("Updated scan final fields")
         self.save_run_data(mark_complete=True)
@@ -251,25 +231,61 @@ class ReportState:
 
     def set_scan_config(self, config: dict[str, Any]) -> None:
         self.scan_config = config
-        self.run_metadata.update(
+        self.run_record["status"] = "running"
+        self.run_record["end_time"] = None
+        self.run_record.pop("scan_results", None)
+        self.end_time = None
+        self.scan_results = None
+        self.final_scan_result = None
+        self.run_record.update(
             {
-                "targets": config.get("targets", []),
-                "user_instructions": config.get("user_instructions", ""),
-                "max_iterations": config.get("max_iterations", 200),
+                "targets_info": config.get("targets", []),
+                "instruction": config.get("user_instructions", ""),
+                "scan_mode": config.get("scan_mode", "deep"),
+                "diff_scope": config.get("diff_scope", {"active": False}),
+                "non_interactive": bool(config.get("non_interactive", False)),
+                "local_sources": config.get("local_sources", []),
+                "scope_mode": config.get("scope_mode", "auto"),
+                "diff_base": config.get("diff_base"),
             }
         )
 
-    def save_run_data(self, mark_complete: bool = False) -> None:
+    def save_run_data(self, mark_complete: bool = False, status: str | None = None) -> None:
         if mark_complete:
+            self.end_time = datetime.now(UTC).isoformat()
+            self.run_record["end_time"] = self.end_time
+            self.run_record["status"] = "completed"
+        elif status and self.run_record.get("status") != "completed":
+            current_status = self.run_record.get("status")
+            if status == "stopped" and current_status in {"failed", "interrupted"}:
+                status = str(current_status)
             if self.end_time is None:
                 self.end_time = datetime.now(UTC).isoformat()
-            self.run_metadata["end_time"] = self.end_time
-            self.run_metadata["status"] = "completed"
+            self.run_record["end_time"] = self.end_time
+            self.run_record["status"] = status
 
         self._save_artifacts()
 
-    def cleanup(self) -> None:
-        self.save_run_data(mark_complete=True)
+    def cleanup(self, status: str = "stopped") -> None:
+        self.save_run_data(status=status)
+
+    def _format_final_scan_result(self, scan_results: dict[str, Any]) -> str:
+        return f"""# Executive Summary
+
+{str(scan_results.get("executive_summary", "")).strip()}
+
+# Methodology
+
+{str(scan_results.get("methodology", "")).strip()}
+
+# Technical Analysis
+
+{str(scan_results.get("technical_analysis", "")).strip()}
+
+# Recommendations
+
+{str(scan_results.get("recommendations", "")).strip()}
+"""
 
     def _save_artifacts(self) -> None:
         """Write scan artifacts under ``run_dir``."""
@@ -283,7 +299,7 @@ class ReportState:
             if self.vulnerability_reports:
                 write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)
 
-            write_run_metadata(run_dir, self.run_metadata)
+            write_run_record(run_dir, self.run_record)
 
             logger.info("Essential scan data saved to: %s", run_dir)
         except (OSError, RuntimeError):

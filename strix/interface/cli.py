@@ -89,6 +89,10 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         "run_name": args.run_name,
         "diff_scope": getattr(args, "diff_scope", {"active": False}),
         "scan_mode": scan_mode,
+        "non_interactive": bool(getattr(args, "non_interactive", False)),
+        "local_sources": getattr(args, "local_sources", None) or [],
+        "scope_mode": getattr(args, "scope_mode", "auto"),
+        "diff_base": getattr(args, "diff_base", None),
         # Forward the new --instruction (if any) to the resume path so it
         # can deliver it as a fresh user message after SDK session replay.
         # Empty string when the user didn't pass one on resume — no-op.
@@ -96,8 +100,9 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     }
 
     report_state = ReportState(args.run_name)
-    report_state.set_scan_config(scan_config)
     report_state.hydrate_from_run_dir()
+    report_state.set_scan_config(scan_config)
+    report_state.save_run_data()
 
     def display_vulnerability(report: dict[str, Any]) -> None:
         report_id = report.get("id", "unknown")
@@ -121,7 +126,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         report_state.cleanup()
 
     def signal_handler(_signum: int, _frame: Any) -> None:
-        report_state.cleanup()
+        report_state.cleanup(status="interrupted")
         sys.exit(1)
 
     atexit.register(cleanup_on_exit)

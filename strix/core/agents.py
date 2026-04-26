@@ -120,15 +120,20 @@ class AgentCoordinator:
             session = runtime.session
             stream = runtime.stream
             interrupt = runtime.interrupt_on_message
-        if session is not None:
-            try:
-                await session.add_items([self._message_to_session_item(message)])
-            except Exception:
-                logger.exception(
-                    "agent.send failed to append to SDK session target=%s",
-                    target_agent_id,
-                )
-                return False
+        if session is None:
+            logger.warning(
+                "agent.send dropped target=%s because its SDK session is not attached",
+                target_agent_id,
+            )
+            return False
+        try:
+            await session.add_items([self._message_to_session_item(message)])
+        except Exception:
+            logger.exception(
+                "agent.send failed to append to SDK session target=%s",
+                target_agent_id,
+            )
+            return False
         async with self._lock:
             self.pending_counts[target_agent_id] = self.pending_counts.get(target_agent_id, 0) + 1
             self.runtimes.setdefault(target_agent_id, AgentRuntime()).wake.set()
@@ -158,6 +163,7 @@ class AgentCoordinator:
             session = self.runtimes.get(agent_id, AgentRuntime()).session
         if count <= 0:
             return 0, []
+        await self._maybe_snapshot()
         if not include_items or session is None:
             return count, []
         items = await session.get_items()

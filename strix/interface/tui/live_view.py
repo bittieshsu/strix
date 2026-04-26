@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pathlib import Path
 
+from strix.core.paths import runtime_state_dir
 from strix.interface.tui.history import load_session_history
 
 
@@ -24,7 +25,8 @@ class TuiLiveView:
         self._tool_event_by_call_id: dict[str, dict[str, Any]] = {}
 
     def hydrate_from_run_dir(self, run_dir: Path) -> None:
-        agents_path = run_dir / "agents.json"
+        state_dir = runtime_state_dir(run_dir)
+        agents_path = state_dir / "agents.json"
         if not agents_path.exists():
             return
         try:

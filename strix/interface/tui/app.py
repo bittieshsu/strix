@@ -708,8 +708,9 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.scan_config = self._build_scan_config(args)
 
         self.report_state = ReportState(self.scan_config["run_name"])
-        self.report_state.set_scan_config(self.scan_config)
         self.report_state.hydrate_from_run_dir()
+        self.report_state.set_scan_config(self.scan_config)
+        self.report_state.save_run_data()
         set_global_report_state(self.report_state)
         self.live_view = TuiLiveView()
         self.live_view.hydrate_from_run_dir(self.report_state.get_run_dir())
@@ -759,6 +760,10 @@ class StrixTUIApp(App):  # type: ignore[misc]
             "run_name": args.run_name,
             "diff_scope": getattr(args, "diff_scope", {"active": False}),
             "scan_mode": getattr(args, "scan_mode", "deep"),
+            "non_interactive": bool(getattr(args, "non_interactive", False)),
+            "local_sources": getattr(args, "local_sources", None) or [],
+            "scope_mode": getattr(args, "scope_mode", "auto"),
+            "diff_base": getattr(args, "diff_base", None),
             # Forward the new --instruction (if any) so the resume path
             # can deliver it as a fresh user message after session replay.
             "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
@@ -769,7 +774,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
             self.report_state.cleanup()
 
         def signal_handler(_signum: int, _frame: Any) -> None:
-            self.report_state.cleanup()
+            self.report_state.cleanup(status="interrupted")
             sys.exit(0)
 
         atexit.register(cleanup_on_exit)
@@ -1611,13 +1616,16 @@ class StrixTUIApp(App):  # type: ignore[misc]
         )
         target_agent_id = self.selected_agent_id
 
-        send_user_message_to_agent(
+        submitted = send_user_message_to_agent(
             coordinator=self.coordinator,
             loop=self._scan_loop,
             live_view=self.live_view,
             target_agent_id=target_agent_id,
             message=message,
         )
+        if not submitted:
+            self.notify("Scan loop is not ready; message was not sent", severity="warning")
+            return
 
         self._displayed_events.clear()
         self._update_chat_view()

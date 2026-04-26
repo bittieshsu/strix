@@ -12,7 +12,6 @@ import json
 import logging
 import uuid
 from collections.abc import Callable
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agents import RunConfig
@@ -35,6 +34,7 @@ from strix.core.inputs import (
     build_scope_context,
     make_model_settings,
 )
+from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.core.sessions import open_agent_session
 from strix.runtime import session_manager
 from strix.telemetry.logging import set_scan_id, setup_scan_logging
@@ -69,13 +69,15 @@ async def run_strix_scan(
 
     # Resolve run_dir before any heavy bring-up so the log file captures
     # everything from sandbox start onwards.
-    run_dir = Path.cwd() / "strix_runs" / scan_id
+    run_dir = run_dir_for(scan_id)
     run_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = runtime_state_dir(run_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
     teardown_logging = setup_scan_logging(run_dir)
     set_scan_id(scan_id)
 
-    agents_path = run_dir / "agents.json"
-    agents_db = run_dir / "agents.db"
+    agents_path = state_dir / "agents.json"
+    agents_db = state_dir / "agents.db"
     is_resume = agents_path.exists()
 
     logger.info(
@@ -103,14 +105,14 @@ async def run_strix_scan(
         coordinator = AgentCoordinator()
     coordinator.set_snapshot_path(agents_path)
 
-    # Wire the per-agent todo store to ``{run_dir}/todos.json`` (mirrored
+    # Wire the per-agent todo store to ``{run_dir}/.state/todos.json`` (mirrored
     # on every CRUD) and reload any prior todos so respawned subagents
     # find their lists intact. Same for the shared notes store.
     from strix.tools.notes.tools import hydrate_notes_from_disk
     from strix.tools.todo.tools import hydrate_todos_from_disk
 
-    hydrate_todos_from_disk(run_dir)
-    hydrate_notes_from_disk(run_dir)
+    hydrate_todos_from_disk(state_dir)
+    hydrate_notes_from_disk(state_dir)
 
     root_id: str | None = None
     if is_resume:

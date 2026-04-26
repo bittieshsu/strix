@@ -142,6 +142,7 @@ hiddenimports = [
     'strix.core.agents',
     'strix.core.execution',
     'strix.core.inputs',
+    'strix.core.paths',
     'strix.core.runner',
     'strix.core.sessions',
     'strix.report',

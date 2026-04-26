@@ -10,16 +10,31 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from strix.core.paths import run_record_path
+
 
 logger = logging.getLogger(__name__)
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
-def write_run_metadata(run_dir: Path, run_metadata: dict[str, Any]) -> None:
+def read_run_record(run_dir: Path) -> dict[str, Any]:
+    path = run_record_path(run_dir)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"run.json at {path} is unreadable: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"run.json at {path} is not an object")
+    return data
+
+
+def write_run_record(run_dir: Path, run_record: dict[str, Any]) -> None:
     _atomic_write_text(
-        run_dir / "run_metadata.json",
-        json.dumps(run_metadata, ensure_ascii=False, indent=2, default=str),
+        run_record_path(run_dir),
+        json.dumps(run_record, ensure_ascii=False, indent=2, default=str),
     )
 
 

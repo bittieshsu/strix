@@ -1,7 +1,7 @@
 """Per-run notes (shared across agents).
 
 Module-level dict shared across every agent in the same scan process.
-Mirrored to ``{run_dir}/notes.json`` after every CRUD via :func:`_persist`
+Mirrored to ``{state_dir}/notes.json`` after every CRUD via :func:`_persist`
 so a process restart can :func:`hydrate_notes_from_disk` and the resumed
 scan picks up exactly where it left off. Concurrent writers are
 serialised by ``_notes_lock`` since each tool entry-point dispatches
@@ -37,8 +37,8 @@ _DEFAULT_CONTENT_PREVIEW_CHARS = 280
 _notes_path: Path | None = None
 
 
-def hydrate_notes_from_disk(run_dir: Path) -> None:
-    """Wire the on-disk mirror at ``{run_dir}/notes.json`` and reload it.
+def hydrate_notes_from_disk(state_dir: Path) -> None:
+    """Wire the on-disk mirror at ``{state_dir}/notes.json`` and reload it.
 
     Called by :func:`run_strix_scan` once at scan setup. Subsequent CRUD
     calls auto-persist after every mutation. Idempotent on missing file.
@@ -46,7 +46,7 @@ def hydrate_notes_from_disk(run_dir: Path) -> None:
     the scan over a broken sidecar artifact.
     """
     global _notes_path  # noqa: PLW0603
-    _notes_path = run_dir / "notes.json"
+    _notes_path = state_dir / "notes.json"
     with _notes_lock:
         _notes_storage.clear()
         if not _notes_path.exists():
@@ -76,7 +76,7 @@ def hydrate_notes_from_disk(run_dir: Path) -> None:
 
 
 def _persist() -> None:
-    """Atomic-rename mirror of ``_notes_storage`` → ``{run_dir}/notes.json``.
+    """Atomic-rename mirror of ``_notes_storage`` → ``{state_dir}/notes.json``.
 
     No-op when ``_notes_path`` isn't wired (tests). Errors are logged
     and swallowed — a disk hiccup must never tear down the agent's call.
