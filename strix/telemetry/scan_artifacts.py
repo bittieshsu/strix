@@ -1,19 +1,21 @@
 """Per-scan artifact writer.
 
 Writes the customer-facing penetration-test report and per-vulnerability
-markdown + a ``vulnerabilities.csv`` index under ``strix_runs/<run>/``.
+markdown + a ``vulnerabilities.csv`` index under ``strix_runs/<run>/``,
+plus a machine-readable ``vulnerabilities.json`` so a resumed scan's
+:class:`~strix.telemetry.tracer.Tracer` can hydrate its in-memory list
+back from disk (otherwise vuln-id allocation collides post-restart).
 """
 
 from __future__ import annotations
 
 import csv
+import json
 import logging
+import tempfile
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
-
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
+from typing import Any
 
 
 logger = logging.getLogger(__name__)
@@ -107,6 +109,15 @@ class ScanArtifactWriter:
                     },
                 )
 
+        # JSON index: machine-readable mirror used by ``Tracer.hydrate_from_run_dir``
+        # so a process restart (resume path in ``orchestration/scan.py``) can
+        # rebuild ``vulnerability_reports`` and re-establish the next id slot
+        # before any new ``add_vulnerability_report`` call collides on disk.
+        _atomic_write_text(
+            self._run_dir / "vulnerabilities.json",
+            json.dumps(reports, ensure_ascii=False, indent=2, default=str),
+        )
+
         if new_reports:
             logger.info(
                 "Saved %d new vulnerability report(s) to: %s",
@@ -114,6 +125,22 @@ class ScanArtifactWriter:
                 vuln_dir,
             )
         logger.info("Updated vulnerability index: %s", csv_path)
+
+
+def _atomic_write_text(path: Path, payload: str) -> None:
+    """``tempfile`` + atomic rename so a crash mid-write leaves the prior file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as tmp:
+        tmp.write(payload)
+        tmp_path = Path(tmp.name)
+    tmp_path.replace(path)
 
 
 def _render_vulnerability_md(report: dict[str, Any]) -> str:

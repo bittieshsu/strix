@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 
@@ -21,6 +24,9 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+_SNAPSHOT_VERSION = 1
 
 
 @dataclass
@@ -58,16 +64,33 @@ class AgentMessageBus:
     stats_live: dict[str, dict[str, Any]] = field(default_factory=dict)
     stats_completed: dict[str, dict[str, Any]] = field(default_factory=dict)
     stopping: set[str] = field(default_factory=set)
+    metadata: dict[str, dict[str, Any]] = field(default_factory=dict)
     _events: dict[str, asyncio.Event] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _snapshot_path: Path | None = None
+
+    def set_snapshot_path(self, path: Path) -> None:
+        """Wire the on-disk snapshot path. Triggers persist after each lifecycle event."""
+        self._snapshot_path = path
 
     async def register(
         self,
         agent_id: str,
         name: str,
         parent_id: str | None,
+        *,
+        task: str | None = None,
+        skills: list[str] | None = None,
+        is_whitebox: bool = False,
+        scan_mode: str = "deep",
+        diff_scope: dict[str, Any] | None = None,
     ) -> None:
-        """Add a new agent to the bus before its Runner.run task starts."""
+        """Add a new agent to the bus before its Runner.run task starts.
+
+        ``task`` / ``skills`` / ``is_whitebox`` / ``scan_mode`` /
+        ``diff_scope`` are persisted on the bus's ``metadata`` map so a
+        process restart can rebuild the same agent from the snapshot.
+        """
         async with self._lock:
             self.inboxes[agent_id] = []
             self.statuses[agent_id] = "running"
@@ -82,7 +105,15 @@ class AgentMessageBus:
                 "warned_85": False,
                 "warned_final": False,
             }
+            self.metadata[agent_id] = {
+                "task": task or "",
+                "skills": list(skills or []),
+                "is_whitebox": bool(is_whitebox),
+                "scan_mode": scan_mode,
+                "diff_scope": diff_scope,
+            }
         logger.info("bus.register %s (%s) parent=%s", agent_id, name, parent_id or "-")
+        await self._maybe_snapshot()
 
     async def send(self, target: str, msg: dict[str, Any]) -> None:
         """Append a message to ``target``'s inbox.
@@ -207,7 +238,9 @@ class AgentMessageBus:
             self.streams.pop(agent_id, None)
             self.stopping.discard(agent_id)
             self._events.pop(agent_id, None)
+            self.metadata.pop(agent_id, None)
         logger.info("bus.finalize %s status=%s", agent_id, status)
+        await self._maybe_snapshot()
 
     async def park(self, agent_id: str) -> None:
         """Mark an agent as ``waiting`` without finalizing.
@@ -222,6 +255,7 @@ class AgentMessageBus:
             if agent_id in self.statuses:
                 self.statuses[agent_id] = "waiting"
         logger.debug("bus.park %s", agent_id)
+        await self._maybe_snapshot()
 
     async def mark_llm_failed(self, agent_id: str) -> None:
         """Mark an agent as ``llm_failed`` after retries exhausted.
@@ -236,6 +270,7 @@ class AgentMessageBus:
             if agent_id in self.statuses:
                 self.statuses[agent_id] = "llm_failed"
         logger.warning("bus.mark_llm_failed %s — awaiting user resume", agent_id)
+        await self._maybe_snapshot()
 
     @contextlib.asynccontextmanager
     async def attach_stream(
@@ -345,3 +380,74 @@ class AgentMessageBus:
         )
         for _aid, streamed in streams_to_cancel:
             streamed.cancel(mode="after_turn")
+
+    # ------------------------------------------------------------------
+    # Snapshot / restore — persist serializable state to ``bus.json`` so
+    # a process restart can rebuild the topology + per-agent metadata
+    # and respawn each non-terminal agent.
+    # ------------------------------------------------------------------
+    async def snapshot(self) -> dict[str, Any]:
+        """Return a JSON-ready deep copy of every persistable bus field.
+
+        Held under ``_lock`` for the copy so the caller can't observe a
+        partial mutation. The actual JSON serialisation happens outside
+        the lock — that's fine for ``json.dumps``: pure-Python primitives,
+        no I/O.
+        """
+        async with self._lock:
+            return {
+                "version": _SNAPSHOT_VERSION,
+                "inboxes": {aid: list(msgs) for aid, msgs in self.inboxes.items()},
+                "statuses": dict(self.statuses),
+                "parent_of": dict(self.parent_of),
+                "names": dict(self.names),
+                "stats_live": {aid: dict(s) for aid, s in self.stats_live.items()},
+                "stats_completed": {aid: dict(s) for aid, s in self.stats_completed.items()},
+                "stopping": list(self.stopping),
+                "metadata": {aid: dict(m) for aid, m in self.metadata.items()},
+            }
+
+    async def restore(self, snap: dict[str, Any]) -> None:
+        """Repopulate from a prior :meth:`snapshot`. Tasks/streams/events
+        stay empty — they're rebuilt by the resume path as agents respawn.
+        """
+        async with self._lock:
+            self.inboxes = {aid: list(msgs) for aid, msgs in snap.get("inboxes", {}).items()}
+            self.statuses = dict(snap.get("statuses", {}))
+            self.parent_of = dict(snap.get("parent_of", {}))
+            self.names = dict(snap.get("names", {}))
+            self.stats_live = {aid: dict(s) for aid, s in snap.get("stats_live", {}).items()}
+            self.stats_completed = {
+                aid: dict(s) for aid, s in snap.get("stats_completed", {}).items()
+            }
+            self.stopping = set(snap.get("stopping", []))
+            self.metadata = {aid: dict(m) for aid, m in snap.get("metadata", {}).items()}
+
+    async def _maybe_snapshot(self) -> None:
+        """Persist the current state to ``_snapshot_path`` if one is set.
+
+        No-op when ``_snapshot_path`` is unset (e.g. in tests). Atomic
+        ``tempfile`` + ``os.replace`` so a crash mid-write leaves the
+        previous valid file intact. Errors are logged + swallowed; a
+        snapshot failure should never tear down the run.
+        """
+        path = self._snapshot_path
+        if path is None:
+            return
+        try:
+            data = await self.snapshot()
+            payload = json.dumps(data, ensure_ascii=False, default=str)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(path.parent),
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp:
+                tmp.write(payload)
+                tmp_path = Path(tmp.name)
+            tmp_path.replace(path)
+        except Exception:
+            logger.exception("bus snapshot to %s failed", path)

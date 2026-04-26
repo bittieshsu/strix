@@ -530,13 +530,35 @@ Async run loop. Rich panels for vuln-found events, live stats panel updated ever
 
 ### 9.6 Run Directory Layout (`strix_runs/<run_name>/`)
 
-Created and managed by `telemetry/tracer.py`. Contents:
+Created and managed by `telemetry/tracer.py` + `orchestration/scan.py`. Contents:
 - `events.jsonl` — every span/event in append-only JSONL (thread-safe writes).
-- `vulnerabilities/vuln_{id}.json` — one file per finding, sorted by severity, dedup-checked.
-- `penetration_test_report.md` — final markdown report (executive summary + methodology + technical analysis + recommendations).
+- `vulnerabilities/vuln_{id}.md` — one file per finding, sorted by severity, dedup-checked.
+- `vulnerabilities.csv` — index of every finding for spreadsheet consumption.
+- `vulnerabilities.json` — machine-readable mirror, used by `Tracer.hydrate_from_run_dir` to repopulate vuln state on resume so id allocation doesn't collide.
+- `penetration_test_report.md` — final markdown report.
+- `session.db` — SDK `SQLiteSession` for the **root** agent's conversation history.
+- `sessions/{child_id}.db` — per-subagent `SQLiteSession`, one file per spawned child.
+- `bus.json` — atomic snapshot of the orchestration bus (topology, statuses, inboxes, per-agent stats, per-agent metadata `{task, skills, is_whitebox, scan_mode, diff_scope}`). Written after every `bus.register` / `finalize` / `park` / `mark_llm_failed`, plus a final dump at scan teardown.
+- `.lock` — advisory `flock`-style file lock; prevents two `strix` processes from running on the same `scan_id` concurrently.
+- `strix.log` — per-scan log file (DEBUG to file, ERROR to stderr).
 - `<target_subdir>/` — local source clones, per-target.
 
-There is **no execution checkpointing** — if the process crashes mid-run, the agent restarts from scratch on retry. Resumability is limited to the interactive-mode wait/resume on inbound messages.
+### 9.7 Resume
+
+Resume is **always on**: presence of `bus.json` triggers it. Fresh runs simply have no `bus.json` to begin with. To force a fresh start with the same `--run-name`, delete the run dir.
+
+What survives a process restart with the same `scan_id`:
+- Root agent's full LLM conversation (replayed by SDK from `session.db`).
+- Every non-terminal subagent's full LLM conversation (replayed from `sessions/{child_id}.db`).
+- Bus topology: `parent_of`, `statuses`, `names`, `stats_live`, `stats_completed`, pending `inboxes`, `metadata` (task + skills per agent).
+- Vulnerability reports (hydrated from `vulnerabilities.json`).
+- Run log (appended to existing `strix.log`).
+
+What does **not** survive:
+- The sandbox container itself — fresh container per process. Files agents wrote under `/workspace/scratch/` or scanner outputs to `/workspace/.strix-source-aware/` are lost. `/workspace/sources` re-mounts from the host so source code is unchanged.
+- Caido proxy state (request log, scopes, replay sessions).
+
+On resume, every subagent in `running` / `waiting` / `llm_failed` status is respawned via `_respawn_subagents` with `initial_input=[]`; the SDK's session replay drives them from where they stopped. Terminal-status agents (`completed` / `crashed` / `stopped`) are left alone but their stats remain in `stats_completed` for the TUI footer. Per-child failure (corrupt session DB, missing skill module) finalizes that child as `crashed` and continues with the rest.
 
 ---
 

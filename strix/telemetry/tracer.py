@@ -1,3 +1,4 @@
+import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -92,6 +93,38 @@ class Tracer:
             self._run_dir.mkdir(exist_ok=True)
 
         return self._run_dir
+
+    def hydrate_from_run_dir(self) -> None:
+        """Reload ``vulnerability_reports`` from ``{run_dir}/vulnerabilities.json``.
+
+        Called by the resume path in :func:`run_strix_scan` before any
+        new agent runs. Ensures id allocation in
+        :meth:`add_vulnerability_report` does not collide on disk
+        (``vuln-0001`` re-used would otherwise overwrite the prior MD).
+        Idempotent — calling without a JSON file is a no-op.
+        """
+        try:
+            json_path = self.get_run_dir() / "vulnerabilities.json"
+            if not json_path.exists():
+                return
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            if not isinstance(data, list):
+                return
+            self.vulnerability_reports = [r for r in data if isinstance(r, dict)]
+            # Pre-mark these ids as already-saved so the writer doesn't
+            # re-emit per-vuln markdown on the next save() call.
+            writer = self._get_writer()
+            for r in self.vulnerability_reports:
+                rid = r.get("id")
+                if isinstance(rid, str):
+                    writer._saved_vuln_ids.add(rid)
+            logger.info(
+                "tracer hydrated %d vulnerability report(s) from %s",
+                len(self.vulnerability_reports),
+                json_path,
+            )
+        except Exception:
+            logger.exception("tracer hydrate_from_run_dir failed; starting fresh")
 
     def _get_writer(self) -> ScanArtifactWriter:
         if self._writer is None:

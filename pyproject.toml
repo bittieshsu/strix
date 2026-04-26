@@ -237,7 +237,7 @@ ignore = [
 # resolution past where mypy needs it. ``_build_root_task`` legitimately
 # walks every supported target type — splitting it into per-type
 # helpers would add indirection without simplifying anything.
-"strix/orchestration/scan.py" = ["TC003", "PLR0912"]
+"strix/orchestration/scan.py" = ["TC003", "PLR0912", "PLR0915", "PLC0415"]
 # Tracer carries a long event surface and a runtime ``Callable``
 # annotation on ``vulnerability_found_callback``.
 "strix/telemetry/tracer.py" = ["TC003", "PLR0912", "PLR0915", "E501"]

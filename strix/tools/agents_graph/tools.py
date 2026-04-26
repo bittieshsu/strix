@@ -20,10 +20,12 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from agents import RunConfig, RunContextWrapper, function_tool
 from agents.items import TResponseInputItem
+from agents.memory import SQLiteSession
 from agents.model_settings import ModelSettings
 from agents.sandbox import SandboxRunConfig
 
@@ -454,7 +456,16 @@ async def create_agent(
             default=str,
         )
 
-    await bus.register(child_id, name, parent_id)
+    await bus.register(
+        child_id,
+        name,
+        parent_id,
+        task=task,
+        skills=list(skills or []),
+        is_whitebox=bool(inner.get("is_whitebox", False)),
+        scan_mode=str(inner.get("scan_mode", "deep")),
+        diff_scope=inner.get("diff_scope"),
+    )
 
     # ``ctx.turn_input`` carries the parent's full conversation up to and
     # including the call that's currently invoking ``create_agent``
@@ -503,12 +514,34 @@ async def create_agent(
         "agent_finish_called": False,
         "is_whitebox": bool(inner.get("is_whitebox", False)),
         "interactive": bool(inner.get("interactive", False)),
+        "scan_mode": str(inner.get("scan_mode", "deep")),
         "diff_scope": inner.get("diff_scope"),
         "run_id": inner.get("run_id"),
         "agent_factory": factory,
         # Stashed for ``agent_finish`` to echo back in its completion report.
         "task": task,
+        # Inherited so ``create_agent`` calls from this child can also
+        # add their per-child sessions to the same teardown list.
+        "_sessions_to_close": inner.get("_sessions_to_close", []),
     }
+
+    # Per-child SQLiteSession at ``{run_dir}/sessions/{child_id}.db`` so
+    # this subagent's full conversation survives a process restart and
+    # can be replayed by the SDK on resume. Path is derived from the
+    # tracer's run_dir (root-side construction in
+    # :func:`run_strix_scan`); fall back to ``./strix_runs/{run_id}/`` if
+    # the tracer is absent (unit-test path).
+    tracer = inner.get("tracer")
+    if tracer is not None and hasattr(tracer, "get_run_dir"):
+        child_session_path = tracer.get_run_dir() / "sessions" / f"{child_id}.db"
+    else:
+        run_id = inner.get("run_id") or "default"
+        child_session_path = Path.cwd() / "strix_runs" / str(run_id) / "sessions" / f"{child_id}.db"
+    child_session_path.parent.mkdir(parents=True, exist_ok=True)
+    child_session = SQLiteSession(session_id=child_id, db_path=child_session_path)
+    sessions_list = child_ctx.get("_sessions_to_close")
+    if isinstance(sessions_list, list):
+        sessions_list.append(child_session)
 
     child_model_settings = ModelSettings(
         parallel_tool_calls=False,
@@ -544,6 +577,7 @@ async def create_agent(
             bus=bus,
             agent_id=child_id,
             interactive=bool(inner.get("interactive", False)),
+            session=child_session,
         ),
         name=f"agent-{name}-{child_id}",
     )

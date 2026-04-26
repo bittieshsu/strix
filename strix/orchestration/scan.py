@@ -1,20 +1,30 @@
-"""Top-level scan entry point.
+"""Top-level scan entry point with auto-resume.
 
-1. Build the per-scan ``AgentMessageBus``.
-2. Bring up (or reuse) a sandbox session for ``scan_id`` via the
-   :mod:`strix.runtime.session_manager`.
-3. Build the root ``Agent`` via :func:`build_strix_agent` and a
-   matching child factory via :func:`make_child_factory`.
-4. Build the root context dict (bus + sandbox bundle + agent_factory).
-5. Register the root in the bus.
-6. Build the ``RunConfig`` via the factory.
-7. Call ``Runner.run(...)`` and surface the result.
-8. ``finally`` cleanup the sandbox session — even on cancel, the bus
-   propagates ``cancel_descendants`` to every spawned child task.
+1. Build (or take from caller) the per-scan ``AgentMessageBus``.
+2. Wire a snapshot path so every lifecycle event auto-persists ``bus.json``.
+3. Acquire an advisory file lock so a second ``strix`` process can't run
+   on the same ``scan_id`` concurrently.
+4. **Resume detection**: if ``{run_dir}/bus.json`` already exists, restore
+   the bus, hydrate the tracer, reuse the persisted ``root_id`` instead
+   of generating a fresh one, and respawn every non-terminal subagent
+   from its per-child ``SQLiteSession`` before starting the root.
+5. Bring up (or reuse) a sandbox session for ``scan_id``.
+6. Build the root ``Agent`` + child factory.
+7. Open root ``SQLiteSession`` at the same path so the SDK replays prior
+   turns on resume.
+8. Call ``Runner.run`` (via ``run_with_continuation``).
+9. ``finally``: close every per-agent session, take a final snapshot,
+   tear down the sandbox, release the lock.
+
+Resume is **always on**: there is no flag — presence of ``bus.json`` is
+the trigger. Fresh runs simply have no ``bus.json`` to begin with.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import json
 import logging
 import uuid
 from pathlib import Path
@@ -209,10 +219,20 @@ async def run_strix_scan(
         if tracer is not None and hasattr(tracer, "get_run_dir")
         else Path.cwd() / "strix_runs" / scan_id
     )
+    run_dir.mkdir(parents=True, exist_ok=True)
     teardown_logging = setup_scan_logging(run_dir)
     set_scan_id(scan_id)
+
+    bus_path = run_dir / "bus.json"
+    is_resume = bus_path.exists()
+    sessions_dir = run_dir / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    lock_handle = _acquire_run_lock(run_dir)
+
     logger.info(
-        "Starting Strix scan %s (image=%s, max_turns=%d, interactive=%s, run_dir=%s)",
+        "%s Strix scan %s (image=%s, max_turns=%d, interactive=%s, run_dir=%s)",
+        "Resuming" if is_resume else "Starting",
         scan_id,
         image,
         max_turns,
@@ -222,6 +242,7 @@ async def run_strix_scan(
 
     resolved_model = model or load_settings().llm.model
     if not resolved_model:
+        _release_run_lock(lock_handle)
         raise RuntimeError(
             "No LLM model configured. Set STRIX_LLM env or pass model= to run_strix_scan().",
         )
@@ -232,15 +253,49 @@ async def run_strix_scan(
     # own the bus internally for the scan's lifetime.
     if bus is None:
         bus = AgentMessageBus()
-    root_id = uuid.uuid4().hex[:8]
-    logger.info("Bringing up sandbox session for scan %s", scan_id)
+    bus.set_snapshot_path(bus_path)
 
+    if tracer is not None and hasattr(tracer, "hydrate_from_run_dir"):
+        tracer.hydrate_from_run_dir()
+
+    root_id: str | None = None
+    if is_resume:
+        try:
+            snap = json.loads(bus_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            _release_run_lock(lock_handle)
+            raise RuntimeError(
+                f"Cannot resume scan {scan_id}: bus.json is unreadable: {exc}",
+            ) from exc
+        await bus.restore(snap)
+        for aid, parent in bus.parent_of.items():
+            if parent is None:
+                root_id = aid
+                break
+        if root_id is None:
+            _release_run_lock(lock_handle)
+            raise RuntimeError(
+                f"Cannot resume scan {scan_id}: bus.json has no root agent (parent=None)",
+            )
+        logger.info(
+            "Resume: restored bus with %d agent(s); root=%s; %d non-terminal to respawn",
+            len(bus.statuses),
+            root_id,
+            sum(1 for s in bus.statuses.values() if s in {"running", "waiting", "llm_failed"})
+            - 1,  # subtract root
+        )
+    else:
+        root_id = uuid.uuid4().hex[:8]
+
+    logger.info("Bringing up sandbox session for scan %s", scan_id)
     bundle = await session_manager.create_or_reuse(
         scan_id,
         image=image,
         sources_path=sources_path,
     )
     logger.info("Sandbox ready for scan %s", scan_id)
+
+    sessions_to_close: list[SQLiteSession] = []
 
     try:
         # Lazy: ``strix.interface`` pulls cli→tui→scan which would cycle.
@@ -264,7 +319,17 @@ async def run_strix_scan(
             system_prompt_context=scope_context,
         )
 
-        await bus.register(root_id, "strix", parent_id=None)
+        if not is_resume:
+            await bus.register(
+                root_id,
+                "strix",
+                parent_id=None,
+                task=_build_root_task(scan_config),
+                skills=skills,
+                is_whitebox=is_whitebox,
+                scan_mode=scan_mode,
+                diff_scope=diff_scope,
+            )
 
         agent_factory = make_child_factory(
             scan_mode=scan_mode,
@@ -287,9 +352,11 @@ async def run_strix_scan(
             "agent_finish_called": False,
             "is_whitebox": is_whitebox,
             "interactive": interactive,
+            "scan_mode": scan_mode,
             "diff_scope": diff_scope,
             "run_id": run_id,
             "agent_factory": agent_factory,
+            "_sessions_to_close": sessions_to_close,
         }
 
         reasoning_effort: Literal["low", "medium", "high"] | None = (
@@ -314,20 +381,30 @@ async def run_strix_scan(
             trace_include_sensitive_data=False,
         )
 
-        # Native SDK session: persists conversation history to
-        # ``strix_runs/<scan_id>/session.db`` so a second invocation
-        # with the same ``scan_id`` resumes from where we left off.
-        session_db = (
-            (tracer.get_run_dir() / "session.db")
-            if tracer is not None and hasattr(tracer, "get_run_dir")
-            else Path.cwd() / "strix_runs" / scan_id / "session.db"
-        )
-        session_db.parent.mkdir(parents=True, exist_ok=True)
-        session = SQLiteSession(session_id=scan_id, db_path=session_db)
+        if is_resume:
+            await _respawn_subagents(
+                bus=bus,
+                sessions_dir=sessions_dir,
+                factory=agent_factory,
+                parent_ctx=context,
+                resolved_model=resolved_model,
+                reasoning_effort=reasoning_effort,
+                root_id=root_id,
+                sessions_to_close=sessions_to_close,
+            )
+
+        # Root SDK session — same path on fresh + resume so SDK replay
+        # picks up prior turns automatically when ``initial_input`` is
+        # an empty list.
+        session_db = run_dir / "session.db"
+        root_session = SQLiteSession(session_id=scan_id, db_path=session_db)
+        sessions_to_close.append(root_session)
+
+        initial_input: Any = [] if is_resume else _build_root_task(scan_config)
 
         return await run_with_continuation(
             agent=root_agent,
-            initial_input=_build_root_task(scan_config),
+            initial_input=initial_input,
             run_config=run_config,
             context=context,
             hooks=StrixOrchestrationHooks(),
@@ -335,17 +412,172 @@ async def run_strix_scan(
             bus=bus,
             agent_id=root_id,
             interactive=interactive,
-            session=session,
+            session=root_session,
         )
     except BaseException:
         logger.exception("Strix scan %s failed", scan_id)
         # Cancel any descendant tasks the root spawned before unwinding.
         # cancel_descendants is idempotent and handles the empty-tree case.
-        await bus.cancel_descendants(root_id)
+        if root_id is not None:
+            await bus.cancel_descendants(root_id)
         raise
     finally:
+        for s in sessions_to_close:
+            with contextlib.suppress(Exception):
+                s.close()
+        with contextlib.suppress(Exception):
+            await bus._maybe_snapshot()
         if cleanup_on_exit:
             logger.info("Tearing down sandbox session for scan %s", scan_id)
             await session_manager.cleanup(scan_id)
+        _release_run_lock(lock_handle)
         logger.info("Strix scan %s done", scan_id)
         teardown_logging()
+
+
+async def _respawn_subagents(
+    *,
+    bus: AgentMessageBus,
+    sessions_dir: Path,
+    factory: Any,
+    parent_ctx: dict[str, Any],
+    resolved_model: str,
+    reasoning_effort: Literal["low", "medium", "high"] | None,
+    root_id: str,
+    sessions_to_close: list[SQLiteSession],
+) -> None:
+    """Re-spawn every non-terminal subagent from a restored bus snapshot.
+
+    Each child gets its own :class:`SQLiteSession` reopened at
+    ``sessions_dir/<child_id>.db`` so the SDK replays its prior
+    conversation. Per-child failure (missing/corrupt session DB,
+    factory raising) finalizes that child as ``crashed`` and continues.
+    Terminal-status agents (``completed`` / ``crashed`` / ``stopped``)
+    are left alone — their stats stay in ``stats_completed`` for the
+    TUI, but no task respawns.
+    """
+    async with bus._lock:
+        candidates = [
+            (
+                aid,
+                bus.names.get(aid, aid),
+                bus.parent_of.get(aid),
+                dict(bus.metadata.get(aid, {})),
+            )
+            for aid, status in bus.statuses.items()
+            if status in {"running", "waiting", "llm_failed"}
+            and bus.parent_of.get(aid) is not None
+            and aid != root_id
+        ]
+
+    for child_id, name, parent_id, md in candidates:
+        try:
+            session_path = sessions_dir / f"{child_id}.db"
+            if not session_path.exists():
+                logger.warning(
+                    "respawn %s (%s): session db missing at %s — finalizing as crashed",
+                    child_id,
+                    name,
+                    session_path,
+                )
+                await bus.finalize(child_id, "crashed")
+                continue
+
+            child_session = SQLiteSession(session_id=child_id, db_path=session_path)
+            sessions_to_close.append(child_session)
+
+            child_skills = list(md.get("skills") or [])
+            child_agent = factory(name=name, skills=child_skills)
+
+            child_ctx: dict[str, Any] = dict(parent_ctx)
+            child_ctx["agent_id"] = child_id
+            child_ctx["parent_id"] = parent_id
+            child_ctx["agent_finish_called"] = False
+            child_ctx["task"] = md.get("task", "")
+
+            child_model_settings = ModelSettings(
+                parallel_tool_calls=False,
+                tool_choice="required",
+                retry=DEFAULT_RETRY,
+            )
+            if reasoning_effort is not None:
+                child_model_settings = child_model_settings.resolve(
+                    ModelSettings(reasoning=Reasoning(effort=reasoning_effort)),
+                )
+            child_run_config = RunConfig(
+                model=resolved_model,
+                model_provider=build_multi_provider(),
+                model_settings=child_model_settings,
+                sandbox=SandboxRunConfig(
+                    client=parent_ctx["sandbox_client"],
+                    session=parent_ctx["sandbox_session"],
+                ),
+                call_model_input_filter=inject_messages_filter,
+                tracing_disabled=False,
+                trace_include_sensitive_data=False,
+            )
+
+            task_handle = asyncio.create_task(
+                run_with_continuation(
+                    agent=child_agent,
+                    initial_input=[],
+                    run_config=child_run_config,
+                    context=child_ctx,
+                    hooks=StrixOrchestrationHooks(),
+                    max_turns=int(parent_ctx.get("max_turns", 300)),
+                    bus=bus,
+                    agent_id=child_id,
+                    interactive=bool(parent_ctx.get("interactive", False)),
+                    session=child_session,
+                ),
+                name=f"agent-{name}-{child_id}",
+            )
+            async with bus._lock:
+                bus.tasks[child_id] = task_handle
+            logger.info(
+                "respawned %s (%s) parent=%s task_len=%d",
+                child_id,
+                name,
+                parent_id or "-",
+                len(md.get("task", "")),
+            )
+        except Exception:
+            logger.exception("respawn %s failed; marking crashed", child_id)
+            with contextlib.suppress(Exception):
+                await bus.finalize(child_id, "crashed")
+
+
+def _acquire_run_lock(run_dir: Path) -> Any:
+    """Take an exclusive flock on ``{run_dir}/.lock`` so two strix processes
+    can't run on the same scan_id concurrently. Raises ``RuntimeError`` if
+    another holder is detected. Best-effort on platforms without ``fcntl``.
+    """
+    lock_path = run_dir / ".lock"
+    try:
+        import fcntl
+    except ImportError:
+        return None
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        handle.close()
+        raise RuntimeError(
+            f"Another strix process appears to be running on this scan "
+            f"(could not acquire lock at {lock_path}). Aborting.",
+        ) from exc
+    return handle
+
+
+def _release_run_lock(handle: Any) -> None:
+    if handle is None:
+        return
+    try:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except (ImportError, OSError):
+        pass
+    finally:
+        with contextlib.suppress(Exception):
+            handle.close()
