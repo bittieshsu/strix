@@ -42,14 +42,21 @@ from strix.telemetry.tracer import get_global_tracer
 HOST_GATEWAY_HOSTNAME = "host.docker.internal"
 
 
+import logging  # noqa: E402
+
+
 # Per-scan logging is set up by ``setup_scan_logging`` from inside
 # ``orchestration.scan.run_strix_scan`` once the scan ``run_dir`` is
 # known — that's where ``strix.*`` levels and handlers are owned. Pre-scan
-# work (``main()``, env validation, image pull) emits at WARNING+ to
-# stderr via the SDK / stdlib defaults.
+# work (``main()``, env validation, image pull) emits via the module
+# logger; once setup_scan_logging runs, those records start landing in
+# the file too.
+
+logger = logging.getLogger(__name__)
 
 
 def validate_environment() -> None:
+    logger.info("Validating environment")
     console = Console()
     missing_required_vars = []
     missing_optional_vars = []
@@ -162,14 +169,20 @@ def validate_environment() -> None:
             padding=(1, 2),
         )
 
+        logger.error("Missing required env vars: %s", missing_required_vars)
         console.print("\n")
         console.print(panel)
         console.print()
         sys.exit(1)
+    logger.info(
+        "Environment OK (optional missing: %s)",
+        missing_optional_vars or "none",
+    )
 
 
 def check_docker_installed() -> None:
     if shutil.which("docker") is None:
+        logger.error("Docker CLI not found in PATH")
         console = Console()
         error_text = Text()
         error_text.append("DOCKER NOT INSTALLED", style="bold red")
@@ -188,10 +201,12 @@ def check_docker_installed() -> None:
         )
         console.print("\n", panel, "\n")
         sys.exit(1)
+    logger.debug("Docker CLI present")
 
 
 async def warm_up_llm() -> None:
     console = Console()
+    logger.info("Warming up LLM connection")
 
     try:
         llm = load_settings().llm
@@ -214,8 +229,10 @@ async def warm_up_llm() -> None:
         response = litellm.completion(**completion_kwargs)
 
         validate_llm_response(response)
+        logger.info("LLM warm-up succeeded for model %s", llm.model)
 
     except Exception as e:
+        logger.exception("LLM warm-up failed")
         error_text = Text()
         error_text.append("LLM CONNECTION FAILED", style="bold red")
         error_text.append("\n\n", style="white")
@@ -473,8 +490,10 @@ def pull_docker_image() -> None:
     image = load_settings().runtime.image
 
     if image_exists(client, image):
+        logger.debug("Docker image already present locally: %s", image)
         return
 
+    logger.info("Pulling docker image: %s", image)
     console.print()
     console.print(f"[dim]Pulling image[/] {image}")
     console.print("[dim yellow]This only happens on first run and may take a few minutes...[/]")
@@ -489,6 +508,7 @@ def pull_docker_image() -> None:
                 last_update = process_pull_line(line, layers_info, status, last_update)
 
         except DockerException as e:
+            logger.exception("Failed to pull docker image %s", image)
             console.print()
             error_text = Text()
             error_text.append("FAILED TO PULL IMAGE", style="bold red")
@@ -506,6 +526,7 @@ def pull_docker_image() -> None:
             console.print(panel, "\n")
             sys.exit(1)
 
+    logger.info("Docker image %s ready", image)
     success_text = Text()
     success_text.append("Docker image ready", style="#22c55e")
     console.print(success_text)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import re
 from dataclasses import is_dataclass
 from datetime import datetime
@@ -22,6 +23,9 @@ from typing import TYPE_CHECKING, Any, Literal
 from agents import RunContextWrapper, function_tool
 
 from strix.tools.proxy import _calls
+
+
+logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
@@ -79,6 +83,7 @@ def _no_client() -> str:
 
 
 def _err(name: str, exc: Exception) -> str:
+    logger.exception("%s failed", name)
     return json.dumps(
         {"success": False, "error": f"{name} failed: {exc}"},
         ensure_ascii=False,

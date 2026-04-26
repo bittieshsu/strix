@@ -17,6 +17,7 @@ re-merging the parent body. Track upstream for an injection hook.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -30,6 +31,9 @@ from agents.sandbox.sandboxes.docker import (
 )
 from docker.models.containers import Container  # type: ignore[import-untyped, unused-ignore]
 from docker.utils import parse_repository_tag  # type: ignore[import-untyped, unused-ignore]
+
+
+logger = logging.getLogger(__name__)
 
 
 class StrixDockerSandboxClient(DockerSandboxClient):
@@ -100,4 +104,16 @@ class StrixDockerSandboxClient(DockerSandboxClient):
         extra_hosts = create_kwargs.setdefault("extra_hosts", {})
         extra_hosts["host.docker.internal"] = "host-gateway"
 
-        return self.docker_client.containers.create(**create_kwargs)
+        logger.debug(
+            "Creating sandbox container: image=%s caps=%s exposed_ports=%s",
+            image,
+            cap_add,
+            list(exposed_ports),
+        )
+        container = self.docker_client.containers.create(**create_kwargs)
+        logger.info(
+            "Sandbox container created: id=%s image=%s",
+            container.short_id if hasattr(container, "short_id") else "?",
+            image,
+        )
+        return container

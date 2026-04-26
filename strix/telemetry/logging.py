@@ -72,6 +72,15 @@ _NOISY_LIBS: tuple[str, ...] = (
 _HANDLER_TAG = "_strix_scan_handler"
 
 
+# Logger roots that also receive our scan handlers. ``strix`` covers
+# everything we own. ``openai.agents`` is the openai-agents SDK's
+# canonical logger (verified: ``agents/logger.py``, ``agents/__init__.py``,
+# ``agents/tracing/logger.py`` all use this namespace) — without
+# attaching here, SDK-internal Runner / tool-dispatch / model-retry
+# events would be invisible.
+_TRACKED_ROOTS: tuple[str, ...] = ("strix", "openai.agents")
+
+
 def setup_scan_logging(run_dir: Path, *, debug: bool | None = None) -> Callable[[], None]:
     """Attach scan-scoped handlers; return a teardown callable.
 
@@ -114,23 +123,25 @@ def setup_scan_logging(run_dir: Path, *, debug: bool | None = None) -> Callable[
     stream_handler.addFilter(context_filter)
     setattr(stream_handler, _HANDLER_TAG, True)
 
-    strix_root = logging.getLogger("strix")
-    strix_root.setLevel(logging.DEBUG)
-    strix_root.addHandler(file_handler)
-    strix_root.addHandler(stream_handler)
-    # Stop ``strix.*`` records from also bubbling to the python root
-    # logger's lastResort handler (which would double-print to stderr).
-    strix_root.propagate = False
+    tracked_loggers = [logging.getLogger(name) for name in _TRACKED_ROOTS]
+    for tracked in tracked_loggers:
+        tracked.setLevel(logging.DEBUG)
+        tracked.addHandler(file_handler)
+        tracked.addHandler(stream_handler)
+        # Stop these records from also bubbling to the python root
+        # logger's lastResort handler (would double-print to stderr).
+        tracked.propagate = False
 
     for name in _NOISY_LIBS:
         logging.getLogger(name).setLevel(logging.WARNING)
 
     def _teardown() -> None:
-        for handler in list(strix_root.handlers):
-            if getattr(handler, _HANDLER_TAG, False):
-                strix_root.removeHandler(handler)
-                with contextlib.suppress(Exception):
-                    handler.flush()
-                    handler.close()
+        for tracked in tracked_loggers:
+            for handler in list(tracked.handlers):
+                if getattr(handler, _HANDLER_TAG, False):
+                    tracked.removeHandler(handler)
+                    with contextlib.suppress(Exception):
+                        handler.flush()
+                        handler.close()
 
     return _teardown

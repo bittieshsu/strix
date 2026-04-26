@@ -1,4 +1,5 @@
 import json
+import logging
 import platform
 import sys
 import urllib.request
@@ -11,6 +12,9 @@ from strix.config import load_settings
 
 if TYPE_CHECKING:
     from strix.telemetry.tracer import Tracer
+
+
+logger = logging.getLogger(__name__)
 
 _POSTHOG_PUBLIC_API_KEY = "phc_7rO3XRuNT5sgSKAl6HDIrWdSGh1COzxw0vxVIAR6vVZ"
 _POSTHOG_HOST = "https://us.i.posthog.com"
@@ -41,11 +45,13 @@ def _get_version() -> str:
 
         return version("strix-agent")
     except Exception:  # noqa: BLE001
+        logger.debug("strix-agent version lookup failed", exc_info=True)
         return "unknown"
 
 
 def _send(event: str, properties: dict[str, Any]) -> None:
     if not _is_enabled():
+        logger.debug("posthog disabled; skipping event %s", event)
         return
     try:
         payload = {
@@ -61,8 +67,11 @@ def _send(event: str, properties: dict[str, Any]) -> None:
         )
         with urllib.request.urlopen(req, timeout=10):  # noqa: S310  # nosec B310
             pass
-    except Exception:  # noqa: BLE001, S110
-        pass  # nosec B110
+    except Exception:  # noqa: BLE001
+        # Telemetry must never disrupt a scan; log + swallow.
+        logger.debug("posthog send failed for event %s", event, exc_info=True)
+    else:
+        logger.debug("posthog event sent: %s", event)
 
 
 def _base_props() -> dict[str, Any]:
