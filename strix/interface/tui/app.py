@@ -707,12 +707,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.args = args
         self.scan_config = self._build_scan_config(args)
 
-        self.scan_store = ReportState(self.scan_config["run_name"])
-        self.scan_store.set_scan_config(self.scan_config)
-        self.scan_store.hydrate_from_run_dir()
-        set_global_report_state(self.scan_store)
+        self.report_state = ReportState(self.scan_config["run_name"])
+        self.report_state.set_scan_config(self.scan_config)
+        self.report_state.hydrate_from_run_dir()
+        set_global_report_state(self.report_state)
         self.live_view = TuiLiveView()
-        self.live_view.hydrate_from_run_dir(self.scan_store.get_run_dir())
+        self.live_view.hydrate_from_run_dir(self.report_state.get_run_dir())
         self._agent_graph_sync_future: Any | None = None
 
         # Pre-create the coordinator here so the TUI can route stop/chat
@@ -766,10 +766,10 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
     def _setup_cleanup_handlers(self) -> None:
         def cleanup_on_exit() -> None:
-            self.scan_store.cleanup()
+            self.report_state.cleanup()
 
         def signal_handler(_signum: int, _frame: Any) -> None:
-            self.scan_store.cleanup()
+            self.report_state.cleanup()
             sys.exit(0)
 
         atexit.register(cleanup_on_exit)
@@ -1229,7 +1229,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
         stats_content = Text()
 
-        stats_text = build_tui_stats_text(self.scan_store)
+        stats_text = build_tui_stats_text(self.report_state)
         if stats_text:
             stats_content.append(stats_text)
 
@@ -1248,7 +1248,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         if not self._is_widget_safe(vuln_panel):
             return
 
-        vulnerabilities = self.scan_store.vulnerability_reports
+        vulnerabilities = self.report_state.vulnerability_reports
 
         if not vulnerabilities:
             self._safe_widget_operation(vuln_panel.add_class, "hidden")
@@ -1348,7 +1348,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
     def _agent_vulnerability_count(self, agent_id: str) -> int:
         return sum(
-            1 for vuln in self.scan_store.vulnerability_reports if vuln.get("agent_id") == agent_id
+            1 for vuln in self.report_state.vulnerability_reports if vuln.get("agent_id") == agent_id
         )
 
     def _gather_agent_events(self, agent_id: str) -> list[dict[str, Any]]:
@@ -1734,7 +1734,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
             self._scan_thread.join(timeout=1.0)
 
-        self.scan_store.cleanup()
+        self.report_state.cleanup()
 
         self.exit()
 

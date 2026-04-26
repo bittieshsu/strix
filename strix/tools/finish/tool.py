@@ -46,22 +46,22 @@ def _do_finish(
     try:
         from strix.report.state import get_global_report_state
 
-        scan_store = get_global_report_state()
-        if scan_store is None:
-            logger.warning("No global scan store; scan results not persisted")
+        report_state = get_global_report_state()
+        if report_state is None:
+            logger.warning("No global report state; scan results not persisted")
             return {
                 "success": True,
                 "scan_completed": True,
                 "message": "Scan completed (not persisted)",
-                "warning": "Results could not be persisted - scan store unavailable",
+                "warning": "Results could not be persisted - report state unavailable",
             }
-        scan_store.update_scan_final_fields(
+        report_state.update_scan_final_fields(
             executive_summary=executive_summary.strip(),
             methodology=methodology.strip(),
             technical_analysis=technical_analysis.strip(),
             recommendations=recommendations.strip(),
         )
-        vuln_count = len(scan_store.vulnerability_reports)
+        vuln_count = len(report_state.vulnerability_reports)
     except (ImportError, AttributeError) as e:
         logger.exception("finish_scan persistence failed")
         return {"success": False, "message": f"Failed to complete scan: {e!s}"}

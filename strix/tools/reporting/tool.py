@@ -216,18 +216,18 @@ async def _do_create(  # noqa: PLR0912
     try:
         from strix.report.state import get_global_report_state
 
-        scan_store = get_global_report_state()
-        if scan_store is None:
-            logger.warning("No global scan store; vulnerability report not persisted")
+        report_state = get_global_report_state()
+        if report_state is None:
+            logger.warning("No global report state; vulnerability report not persisted")
             return {
                 "success": True,
                 "message": f"Vulnerability report '{title}' created (not persisted)",
-                "warning": "Report could not be persisted - scan store unavailable",
+                "warning": "Report could not be persisted - report state unavailable",
             }
 
         from strix.report.dedupe import check_duplicate
 
-        existing = scan_store.get_existing_vulnerabilities()
+        existing = report_state.get_existing_vulnerabilities()
         candidate = {
             "title": title,
             "description": description,
@@ -258,7 +258,7 @@ async def _do_create(  # noqa: PLR0912
                 "reason": dedupe.get("reason", ""),
             }
 
-        report_id = scan_store.add_vulnerability_report(
+        report_id = report_state.add_vulnerability_report(
             title=title,
             description=description,
             severity=severity,

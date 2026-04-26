@@ -95,9 +95,9 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
     }
 
-    scan_store = ReportState(args.run_name)
-    scan_store.set_scan_config(scan_config)
-    scan_store.hydrate_from_run_dir()
+    report_state = ReportState(args.run_name)
+    report_state.set_scan_config(scan_config)
+    report_state.hydrate_from_run_dir()
 
     def display_vulnerability(report: dict[str, Any]) -> None:
         report_id = report.get("id", "unknown")
@@ -115,13 +115,13 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         console.print(vuln_panel)
         console.print()
 
-    scan_store.vulnerability_found_callback = display_vulnerability
+    report_state.vulnerability_found_callback = display_vulnerability
 
     def cleanup_on_exit() -> None:
-        scan_store.cleanup()
+        report_state.cleanup()
 
     def signal_handler(_signum: int, _frame: Any) -> None:
-        scan_store.cleanup()
+        report_state.cleanup()
         sys.exit(1)
 
     atexit.register(cleanup_on_exit)
@@ -130,14 +130,14 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, signal_handler)
 
-    set_global_report_state(scan_store)
+    set_global_report_state(report_state)
 
     def create_live_status() -> Panel:
         status_text = Text()
         status_text.append("Penetration test in progress", style="bold #22c55e")
         status_text.append("\n\n")
 
-        stats_text = build_live_stats_text(scan_store)
+        stats_text = build_live_stats_text(report_state)
         if stats_text:
             status_text.append(stats_text)
 
@@ -196,7 +196,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         console.print(f"[bold red]Error during penetration test:[/] {e}")
         raise
 
-    if scan_store.final_scan_result:
+    if report_state.final_scan_result:
         console.print()
 
         final_report_text = Text()
@@ -206,7 +206,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
             Text.assemble(
                 final_report_text,
                 "\n\n",
-                scan_store.final_scan_result,
+                report_state.final_scan_result,
             ),
             title="[bold white]STRIX",
             title_align="left",

@@ -558,11 +558,11 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
 
 def display_completion_message(args: argparse.Namespace, results_path: Path) -> None:
     console = Console()
-    scan_store = get_global_report_state()
+    report_state = get_global_report_state()
 
     scan_completed = False
-    if scan_store and scan_store.scan_results:
-        scan_completed = scan_store.scan_results.get("scan_completed", False)
+    if report_state and report_state.scan_results:
+        scan_completed = report_state.scan_results.get("scan_completed", False)
 
     completion_text = Text()
     if scan_completed:
@@ -581,7 +581,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
             target_text.append("\n        ")
             target_text.append(target_info["original"], style="white")
 
-    stats_text = build_final_stats_text(scan_store)
+    stats_text = build_final_stats_text(report_state)
 
     panel_parts: list[Text | str] = [completion_text, "\n\n", target_text]
 
@@ -765,16 +765,16 @@ def main() -> None:
         posthog.error("unhandled_exception", str(e))
         raise
     finally:
-        scan_store = get_global_report_state()
-        if scan_store:
-            posthog.end(scan_store, exit_reason=exit_reason)
+        report_state = get_global_report_state()
+        if report_state:
+            posthog.end(report_state, exit_reason=exit_reason)
 
     results_path = Path("strix_runs") / args.run_name
     display_completion_message(args, results_path)
 
     if args.non_interactive:
-        scan_store = get_global_report_state()
-        if scan_store and scan_store.vulnerability_reports:
+        report_state = get_global_report_state()
+        if report_state and report_state.vulnerability_reports:
             sys.exit(2)
 
 

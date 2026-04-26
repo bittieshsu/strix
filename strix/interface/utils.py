@@ -196,13 +196,13 @@ def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR091
     return text
 
 
-def _build_vulnerability_stats(stats_text: Text, scan_store: Any) -> None:
+def _build_vulnerability_stats(stats_text: Text, report_state: Any) -> None:
     """Build vulnerability section of stats text."""
-    vuln_count = len(scan_store.vulnerability_reports)
+    vuln_count = len(report_state.vulnerability_reports)
 
     if vuln_count > 0:
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-        for report in scan_store.vulnerability_reports:
+        for report in report_state.vulnerability_reports:
             severity = report.get("severity", "").lower()
             if severity in severity_counts:
                 severity_counts[severity] += 1
@@ -235,20 +235,20 @@ def _build_vulnerability_stats(stats_text: Text, scan_store: Any) -> None:
         stats_text.append("\n")
 
 
-def build_final_stats_text(scan_store: Any) -> Text:
+def build_final_stats_text(report_state: Any) -> Text:
     """Build final stats from Strix-owned scan artifacts."""
     stats_text = Text()
-    if not scan_store:
+    if not report_state:
         return stats_text
 
-    _build_vulnerability_stats(stats_text, scan_store)
+    _build_vulnerability_stats(stats_text, report_state)
 
     return stats_text
 
 
-def build_live_stats_text(scan_store: Any) -> Text:
+def build_live_stats_text(report_state: Any) -> Text:
     stats_text = Text()
-    if not scan_store:
+    if not report_state:
         return stats_text
 
     model = load_settings().llm.model or "unknown"
@@ -256,13 +256,13 @@ def build_live_stats_text(scan_store: Any) -> Text:
     stats_text.append(str(model), style="white")
     stats_text.append("\n")
 
-    vuln_count = len(scan_store.vulnerability_reports)
+    vuln_count = len(report_state.vulnerability_reports)
     stats_text.append("Vulnerabilities ", style="dim")
     stats_text.append(f"{vuln_count}", style="white")
     stats_text.append("\n")
     if vuln_count > 0:
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-        for report in scan_store.vulnerability_reports:
+        for report in report_state.vulnerability_reports:
             severity = report.get("severity", "").lower()
             if severity in severity_counts:
                 severity_counts[severity] += 1
@@ -287,15 +287,15 @@ def build_live_stats_text(scan_store: Any) -> Text:
     return stats_text
 
 
-def build_tui_stats_text(scan_store: Any) -> Text:
+def build_tui_stats_text(report_state: Any) -> Text:
     stats_text = Text()
-    if not scan_store:
+    if not report_state:
         return stats_text
 
     model = load_settings().llm.model or "unknown"
     stats_text.append(str(model), style="white")
 
-    caido_url = getattr(scan_store, "caido_url", None)
+    caido_url = getattr(report_state, "caido_url", None)
     if caido_url:
         stats_text.append("\n")
         stats_text.append("Caido: ", style="bold white")

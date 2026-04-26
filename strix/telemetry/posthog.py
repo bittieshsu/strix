@@ -114,9 +114,9 @@ def finding(severity: str) -> None:
     )
 
 
-def end(scan_store: "ReportState", exit_reason: str = "completed") -> None:
+def end(report_state: "ReportState", exit_reason: str = "completed") -> None:
     vulnerabilities_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-    for v in scan_store.vulnerability_reports:
+    for v in report_state.vulnerability_reports:
         sev = v.get("severity", "info").lower()
         if sev in vulnerabilities_counts:
             vulnerabilities_counts[sev] += 1
@@ -125,8 +125,8 @@ def end(scan_store: "ReportState", exit_reason: str = "completed") -> None:
     try:
         from datetime import datetime
 
-        start = datetime.fromisoformat(scan_store.start_time.replace("Z", "+00:00"))
-        end_iso = scan_store.end_time or datetime.now(start.tzinfo).isoformat()
+        start = datetime.fromisoformat(report_state.start_time.replace("Z", "+00:00"))
+        end_iso = report_state.end_time or datetime.now(start.tzinfo).isoformat()
         duration = (datetime.fromisoformat(end_iso.replace("Z", "+00:00")) - start).total_seconds()
     except (ValueError, TypeError, AttributeError):
         pass
@@ -137,7 +137,7 @@ def end(scan_store: "ReportState", exit_reason: str = "completed") -> None:
             **_base_props(),
             "exit_reason": exit_reason,
             "duration_seconds": round(duration),
-            "vulnerabilities_total": len(scan_store.vulnerability_reports),
+            "vulnerabilities_total": len(report_state.vulnerability_reports),
             **{f"vulnerabilities_{k}": v for k, v in vulnerabilities_counts.items()},
         },
     )
