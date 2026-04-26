@@ -493,21 +493,30 @@ async def _respawn_subagents(
     TUI, but no task respawns.
     """
     async with bus._lock:
-        candidates = [
-            (
-                aid,
-                bus.names.get(aid, aid),
-                bus.parent_of.get(aid),
-                dict(bus.metadata.get(aid, {})),
-            )
-            for aid, status in bus.statuses.items()
-            if status in {"running", "waiting", "llm_failed"}
-            and bus.parent_of.get(aid) is not None
-            and aid != root_id
-            # Honour a previously-issued graceful stop — the user clicked
-            # "stop" before the crash; don't respawn what they cancelled.
-            and aid not in bus.stopping
+        # Snapshot the iteration view first so we can mutate via finalize
+        # below without "dict changed during iteration" trouble.
+        agents_snapshot = [
+            (aid, status, dict(bus.metadata.get(aid, {}))) for aid, status in bus.statuses.items()
         ]
+        candidates: list[tuple[str, str, str | None, dict[str, Any]]] = []
+        to_finalize_stopped: list[str] = []
+        for aid, status, md in agents_snapshot:
+            if status not in {"running", "waiting", "llm_failed"}:
+                continue
+            if bus.parent_of.get(aid) is None or aid == root_id:
+                continue
+            if aid in bus.stopping:
+                # User clicked "stop" before the crash; don't respawn,
+                # and reconcile the bus so its status truthfully reflects
+                # "stopped" instead of staying "running" forever.
+                to_finalize_stopped.append(aid)
+                continue
+            candidates.append((aid, bus.names.get(aid, aid), bus.parent_of.get(aid), md))
+
+    # Finalize outside the lock — ``bus.finalize`` acquires it itself.
+    for aid in to_finalize_stopped:
+        logger.info("respawn-skip %s: previously-cancelled, finalizing as stopped", aid)
+        await bus.finalize(aid, "stopped")
 
     for child_id, name, parent_id, md in candidates:
         try:
