@@ -394,7 +394,7 @@ Examples:
         help=(
             "Resume a prior scan by its run name (the dir under ./strix_runs/). "
             "Picks up the root + every non-terminal subagent's full LLM history "
-            "and bus topology. Skips fresh run-name generation."
+            "and agent topology. Skips fresh run-name generation."
         ),
     )
 
@@ -417,7 +417,7 @@ Examples:
 
     # Capture before ``_load_resume_state`` overrides — used by the resume
     # path in ``run_strix_scan`` to decide whether to inject the new
-    # instruction into the root's bus inbox after session replay.
+    # instruction into the root's SDK session after replay.
     args.user_explicit_instruction = args.instruction if args.resume else None
 
     if args.resume:
@@ -427,11 +427,11 @@ Examples:
                 "the prior run left off, including the original target list."
             )
         _load_resume_state(args, parser)
-        bus_path = Path("strix_runs") / args.resume / "bus.json"
-        if not bus_path.exists():
+        agents_path = Path("strix_runs") / args.resume / "agents.json"
+        if not agents_path.exists():
             parser.error(
-                f"--resume {args.resume}: missing {bus_path}. The run was "
-                f"persisted but never reached its first bus snapshot — "
+                f"--resume {args.resume}: missing {agents_path}. The run was "
+                f"persisted but never reached its first agent snapshot — "
                 f"there's nothing to resume from. Pick a fresh --run-name "
                 f"or remove --resume to start over with the same targets."
             )

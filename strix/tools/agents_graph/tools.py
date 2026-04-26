@@ -492,13 +492,6 @@ async def create_agent(
             default=str,
         )
 
-    tracer = inner.get("tracer")
-    if tracer is not None and hasattr(tracer, "get_run_dir"):
-        child_session_path = tracer.get_run_dir() / "sessions" / f"{child_id}.db"
-    else:
-        run_id = inner.get("run_id") or "default"
-        child_session_path = Path.cwd() / "strix_runs" / str(run_id) / "sessions" / f"{child_id}.db"
-
     await coordinator.register(
         child_id,
         name,
@@ -508,7 +501,6 @@ async def create_agent(
         is_whitebox=bool(inner.get("is_whitebox", False)),
         scan_mode=str(inner.get("scan_mode", "deep")),
         diff_scope=inner.get("diff_scope"),
-        session_path=child_session_path,
     )
 
     # ``ctx.turn_input`` carries the parent's full conversation up to and
@@ -569,13 +561,12 @@ async def create_agent(
         "_sessions_to_close": inner.get("_sessions_to_close", []),
     }
 
-    # Per-child SQLiteSession at ``{run_dir}/sessions/{child_id}.db`` so
-    # this subagent's full conversation survives a process restart and
-    # can be replayed by the SDK on resume. Path is derived from the
-    # tracer's run_dir (root-side construction in
-    # :func:`run_strix_scan`); fall back to ``./strix_runs/{run_id}/`` if
-    # the tracer is absent (unit-test path).
-    child_session = open_agent_session(child_id, child_session_path)
+    # Every agent gets its own SDK session_id inside the shared agents.db.
+    agents_db_path = inner.get("agents_db_path")
+    if not isinstance(agents_db_path, Path):
+        run_id = inner.get("run_id") or "default"
+        agents_db_path = Path.cwd() / "strix_runs" / str(run_id) / "agents.db"
+    child_session = open_agent_session(child_id, agents_db_path)
     sessions_list = child_ctx.get("_sessions_to_close")
     if isinstance(sessions_list, list):
         sessions_list.append(child_session)

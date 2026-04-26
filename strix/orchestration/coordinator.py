@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 Status = Literal["running", "waiting", "completed", "stopped", "crashed", "failed", "llm_failed"]
 ACTIVE_AGENT_STATUSES = {"running", "waiting", "llm_failed"}
-_SNAPSHOT_VERSION = 2
+_SNAPSHOT_VERSION = 3
 _WAITING_TIMEOUT_SUBAGENT = 300.0
 _TIMEOUT_RESUME_MESSAGE = "Waiting timeout reached. Resuming execution."
 
@@ -78,7 +78,6 @@ class AgentCoordinator:
         is_whitebox: bool = False,
         scan_mode: str = "deep",
         diff_scope: dict[str, Any] | None = None,
-        session_path: str | Path | None = None,
     ) -> None:
         async with self._lock:
             self.statuses[agent_id] = "running"
@@ -93,7 +92,6 @@ class AgentCoordinator:
                 "is_whitebox": bool(is_whitebox),
                 "scan_mode": scan_mode,
                 "diff_scope": diff_scope,
-                "session_path": str(session_path) if session_path is not None else "",
             }
             self.runtimes.setdefault(agent_id, AgentRuntime())
         logger.info("agent.register %s (%s) parent=%s", agent_id, name, parent_id or "-")
@@ -362,8 +360,6 @@ class AgentCoordinator:
                     aid: [dict(msg) for msg in msgs] for aid, msgs in self.queued_messages.items()
                 },
                 "stats_live": {aid: dict(s) for aid, s in self.stats_live.items()},
-                # Kept for old tracer hydration shape.
-                "stats_completed": {},
             }
 
     async def restore(self, snap: dict[str, Any]) -> None:
@@ -378,15 +374,7 @@ class AgentCoordinator:
                 aid: [dict(msg) for msg in msgs]
                 for aid, msgs in snap.get("queued_messages", {}).items()
             }
-            for aid in snap.get("stopping", []):
-                if aid in self.statuses:
-                    self.statuses[aid] = "stopped"
             self.stats_live = {aid: dict(s) for aid, s in snap.get("stats_live", {}).items()}
-            for aid, msgs in snap.get("inboxes", {}).items():
-                # Legacy bus snapshots used inboxes. Preserve them as queued
-                # messages so attaching the SDK session makes them visible.
-                self.pending_counts[aid] = max(self.pending_counts.get(aid, 0), len(msgs))
-                self.queued_messages.setdefault(aid, []).extend(dict(msg) for msg in msgs)
             for aid in self.statuses:
                 self.runtimes.setdefault(aid, AgentRuntime())
 

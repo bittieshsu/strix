@@ -31,8 +31,8 @@ Removed custom orchestration modules:
 - `hooks.py`
 - `run_loop.py`
 
-`bus.json` remains only as the backward-compatible snapshot filename for old runs and tracer
-hydration. It is no longer backed by `AgentMessageBus`.
+`agents.json` is the only graph/status snapshot. `agents.db` is the only SDK session database;
+each agent uses its own SDK `session_id` inside that shared database.
 
 ## Lifecycle Semantics
 
@@ -65,5 +65,5 @@ Unknown agent id is the only invalid message target. There is no routing-closed 
 - Interactive `wait_for_message` parks and returns control to the continuation loop.
 - Non-interactive `wait_for_message` returns the newly appended session message content.
 - `finish_scan` blocks while child agents are active.
-- Resume rebuilds parked child runners from `bus.json` plus per-agent session DBs.
+- Resume rebuilds parked child runners from `agents.json` plus the shared `agents.db`.
 - Graceful stop works for both active-stream and parked agents.

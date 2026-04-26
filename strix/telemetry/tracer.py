@@ -167,29 +167,29 @@ class Tracer:
                 json_path,
             )
 
-        bus_path = run_dir / "bus.json"
-        if bus_path.exists():
+        agents_path = run_dir / "agents.json"
+        if agents_path.exists():
             try:
-                bus_data = json.loads(bus_path.read_text(encoding="utf-8"))
+                agents_data = json.loads(agents_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
-                # Caller will surface this same corruption via ``bus.restore``;
+                # Caller will surface this same corruption via coordinator restore;
                 # no need to fail twice. Skip the agents/stats hydrate path.
-                bus_data = None
-            if isinstance(bus_data, dict):
-                self._hydrate_agents_tree(bus_data)
-                self._hydrate_llm_stats(bus_data)
+                agents_data = None
+            if isinstance(agents_data, dict):
+                self._hydrate_agents_tree(agents_data)
+                self._hydrate_llm_stats(agents_data)
 
-    def _hydrate_agents_tree(self, bus_data: dict[str, Any]) -> None:
-        """Populate ``self.agents`` from a bus snapshot.
+    def _hydrate_agents_tree(self, agents_data: dict[str, Any]) -> None:
+        """Populate ``self.agents`` from the coordinator snapshot.
 
         Without this, the TUI tree on resume would only show agents
         currently running (mirrored by ``on_agent_start``); completed /
         crashed / stopped children from the prior run would be invisible
-        even though the bus knows about them.
+        even though the coordinator knows about them.
         """
-        statuses = bus_data.get("statuses") or {}
-        names = bus_data.get("names") or {}
-        parent_of = bus_data.get("parent_of") or {}
+        statuses = agents_data.get("statuses") or {}
+        names = agents_data.get("names") or {}
+        parent_of = agents_data.get("parent_of") or {}
         if not isinstance(statuses, dict):
             return
         timestamp = self.start_time
@@ -206,29 +206,25 @@ class Tracer:
             }
         logger.info("tracer hydrated %d agent(s) into tree", len(self.agents))
 
-    def _hydrate_llm_stats(self, bus_data: dict[str, Any]) -> None:
-        """Seed ``self._llm_stats`` from the bus snapshot's per-agent counters.
+    def _hydrate_llm_stats(self, agents_data: dict[str, Any]) -> None:
+        """Seed ``self._llm_stats`` from the coordinator snapshot's counters.
 
-        Aggregates ``stats_live + stats_completed`` so the resumed scan's
-        TUI footer shows cumulative tokens / requests across the prior
-        run plus whatever the resume adds, instead of resetting to zero.
+        This keeps the resumed scan's TUI footer cumulative instead of
+        resetting to zero.
         """
         totals = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "requests": 0}
-        for bucket_key in ("stats_live", "stats_completed"):
-            bucket = bus_data.get(bucket_key) or {}
-            if not isinstance(bucket, dict):
-                continue
+        bucket = agents_data.get("stats_live") or {}
+        if isinstance(bucket, dict):
             for entry in bucket.values():
-                if not isinstance(entry, dict):
-                    continue
-                totals["input_tokens"] += int(entry.get("in", 0) or 0)
-                totals["output_tokens"] += int(entry.get("out", 0) or 0)
-                totals["cached_tokens"] += int(entry.get("cached", 0) or 0)
-                totals["requests"] += int(entry.get("calls", 0) or 0)
+                if isinstance(entry, dict):
+                    totals["input_tokens"] += int(entry.get("in", 0) or 0)
+                    totals["output_tokens"] += int(entry.get("out", 0) or 0)
+                    totals["cached_tokens"] += int(entry.get("cached", 0) or 0)
+                    totals["requests"] += int(entry.get("calls", 0) or 0)
         for k, v in totals.items():
             self._llm_stats[k] = v
         logger.info(
-            "tracer hydrated llm stats from bus (in=%d out=%d cached=%d requests=%d)",
+            "tracer hydrated llm stats from agents snapshot (in=%d out=%d cached=%d requests=%d)",
             totals["input_tokens"],
             totals["output_tokens"],
             totals["cached_tokens"],

@@ -1,23 +1,23 @@
 """Top-level scan entry point with auto-resume.
 
 1. Build (or take from caller) the per-scan ``AgentCoordinator``.
-2. Wire a snapshot path so every lifecycle event auto-persists ``bus.json``.
+2. Wire a snapshot path so lifecycle events auto-persist ``agents.json``.
 3. Acquire an advisory file lock so a second ``strix`` process can't run
    on the same ``scan_id`` concurrently.
-4. **Resume detection**: if ``{run_dir}/bus.json`` already exists, restore
+4. **Resume detection**: if ``{run_dir}/agents.json`` already exists, restore
    the coordinator, hydrate the tracer, reuse the persisted ``root_id`` instead
    of generating a fresh one, and respawn every non-terminal subagent
-   from its per-child ``SQLiteSession`` before starting the root.
+   from the shared SDK ``agents.db`` before starting the root.
 5. Bring up (or reuse) a sandbox session for ``scan_id``.
 6. Build the root ``Agent`` + child factory.
-7. Open root ``SQLiteSession`` at the same path so the SDK replays prior
+7. Open root ``SQLiteSession`` in ``agents.db`` so the SDK replays prior
    turns on resume.
 8. Call ``Runner.run`` (via ``run_with_continuation``).
 9. ``finally``: close every per-agent session, take a final snapshot,
    tear down the sandbox, release the lock.
 
-Resume is **always on**: there is no flag — presence of ``bus.json`` is
-the trigger. Fresh runs simply have no ``bus.json`` to begin with.
+Resume is **always on**: there is no flag — presence of ``agents.json`` is
+the trigger. Fresh runs simply have no ``agents.json`` to begin with.
 """
 
 from __future__ import annotations
@@ -229,10 +229,9 @@ async def run_strix_scan(
     teardown_logging = setup_scan_logging(run_dir)
     set_scan_id(scan_id)
 
-    bus_path = run_dir / "bus.json"
-    is_resume = bus_path.exists()
-    sessions_dir = run_dir / "sessions"
-    sessions_dir.mkdir(parents=True, exist_ok=True)
+    agents_path = run_dir / "agents.json"
+    agents_db = run_dir / "agents.db"
+    is_resume = agents_path.exists()
 
     lock_handle = _acquire_run_lock(run_dir)
 
@@ -258,7 +257,7 @@ async def run_strix_scan(
     # commands while the scan loop runs in another thread.
     if coordinator is None:
         coordinator = AgentCoordinator()
-    coordinator.set_snapshot_path(bus_path)
+    coordinator.set_snapshot_path(agents_path)
 
     if tracer is not None and hasattr(tracer, "hydrate_from_run_dir"):
         tracer.hydrate_from_run_dir()
@@ -275,12 +274,17 @@ async def run_strix_scan(
     root_id: str | None = None
     if is_resume:
         try:
-            snap = json.loads(bus_path.read_text(encoding="utf-8"))
+            snap = json.loads(agents_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             _release_run_lock(lock_handle)
             raise RuntimeError(
-                f"Cannot resume scan {scan_id}: bus.json is unreadable: {exc}",
+                f"Cannot resume scan {scan_id}: agents.json is unreadable: {exc}",
             ) from exc
+        if not agents_db.exists():
+            _release_run_lock(lock_handle)
+            raise RuntimeError(
+                f"Cannot resume scan {scan_id}: missing SDK session database at {agents_db}",
+            )
         await coordinator.restore(snap)
         for aid, parent in coordinator.parent_of.items():
             if parent is None:
@@ -289,7 +293,7 @@ async def run_strix_scan(
         if root_id is None:
             _release_run_lock(lock_handle)
             raise RuntimeError(
-                f"Cannot resume scan {scan_id}: bus.json has no root agent (parent=None)",
+                f"Cannot resume scan {scan_id}: agents.json has no root agent (parent=None)",
             )
         logger.info(
             "Resume: restored coordinator with %d agent(s); root=%s",
@@ -368,6 +372,7 @@ async def run_strix_scan(
             "diff_scope": diff_scope,
             "run_id": run_id,
             "agent_factory": agent_factory,
+            "agents_db_path": agents_db,
             "_sessions_to_close": sessions_to_close,
         }
 
@@ -395,7 +400,7 @@ async def run_strix_scan(
         if is_resume:
             await _respawn_subagents(
                 coordinator=coordinator,
-                sessions_dir=sessions_dir,
+                agents_db_path=agents_db,
                 factory=agent_factory,
                 parent_ctx=context,
                 resolved_model=resolved_model,
@@ -404,18 +409,16 @@ async def run_strix_scan(
                 sessions_to_close=sessions_to_close,
             )
 
-        # Root SDK session — same path on fresh + resume so SDK replay
-        # picks up prior turns automatically when ``initial_input`` is
-        # an empty list.
-        session_db = run_dir / "session.db"
-        root_session = SQLiteSession(session_id=scan_id, db_path=session_db)
+        # All agents share one SQLite database; SDK session_id separates
+        # each agent's conversation inside that database.
+        root_session = open_agent_session(root_id, agents_db)
         sessions_to_close.append(root_session)
         await coordinator.attach_runtime(root_id, session=root_session)
 
         initial_input: Any = [] if is_resume else _build_root_task(scan_config)
 
         # Resume + new ``--instruction``: SDK replay drives root from
-        # session.db with ``initial_input=[]``, so a brand-new instruction
+        # agents.db with ``initial_input=[]``, so a brand-new instruction
         # passed on the resume CLI would otherwise be silently ignored.
         # Inject it as a fresh user message in root's SDK session; the
         # next run cycle will replay it with the rest of the session.
@@ -431,7 +434,7 @@ async def run_strix_scan(
                 },
             )
             logger.info(
-                "Resume: injected new instruction into root inbox (len=%d)",
+                "Resume: injected new instruction into root SDK session (len=%d)",
                 len(resume_instruction),
             )
 
@@ -489,7 +492,7 @@ async def run_strix_scan(
 async def _respawn_subagents(
     *,
     coordinator: AgentCoordinator,
-    sessions_dir: Path,
+    agents_db_path: Path,
     factory: Any,
     parent_ctx: dict[str, Any],
     resolved_model: str,
@@ -499,14 +502,12 @@ async def _respawn_subagents(
 ) -> None:
     """Re-spawn subagent runners from a restored coordinator snapshot.
 
-    Each child gets its own :class:`SQLiteSession` reopened at
-    ``sessions_dir/<child_id>.db`` so the SDK replays its prior
-    conversation. Per-child failure (missing/corrupt session DB,
-    factory raising) finalizes that child as ``crashed`` and continues.
-    Interactive mode respawns every registered child as a parked runner
-    unless it was actively running before the crash. That keeps
-    completed/stopped/crashed/failed agents addressable: a later message
-    wakes the SDK session instead of being dropped into a dead inbox.
+    Each child gets its own SDK ``session_id`` inside the shared
+    ``agents.db`` so the SDK replays its prior conversation. Interactive
+    mode respawns every registered child as a parked runner unless it was
+    actively running before the crash. That keeps completed/stopped/
+    crashed/failed agents addressable: a later message wakes the SDK
+    session instead of being dropped into a dead inbox.
     """
     interactive = bool(parent_ctx.get("interactive", False))
     async with coordinator._lock:
@@ -534,26 +535,6 @@ async def _respawn_subagents(
 
     for child_id, name, parent_id, md in candidates:
         try:
-            session_path = sessions_dir / f"{child_id}.db"
-            if not session_path.exists():
-                if interactive:
-                    logger.warning(
-                        "respawn %s (%s): session db missing at %s; starting parked with empty session",
-                        child_id,
-                        name,
-                        session_path,
-                    )
-                else:
-                    logger.warning(
-                        "respawn %s (%s): session db missing at %s — marking crashed",
-                        child_id,
-                        name,
-                        session_path,
-                    )
-                    await coordinator.set_status(child_id, "crashed")
-                    continue
-                session_path.parent.mkdir(parents=True, exist_ok=True)
-
             restored_status = str(md.get("_restored_status") or "running")
             start_parked = interactive and restored_status != "running"
 
@@ -565,7 +546,7 @@ async def _respawn_subagents(
                     restored_status,
                 )
 
-            child_session = open_agent_session(child_id, session_path)
+            child_session = open_agent_session(child_id, agents_db_path)
             sessions_to_close.append(child_session)
             await coordinator.attach_runtime(child_id, session=child_session)
 
