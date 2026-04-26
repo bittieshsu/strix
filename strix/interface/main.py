@@ -37,7 +37,7 @@ from strix.interface.utils import (
     validate_llm_response,
 )
 from strix.telemetry import posthog
-from strix.telemetry.tracer import get_global_tracer
+from strix.telemetry.scan_store import get_global_scan_store
 
 
 HOST_GATEWAY_HOSTNAME = "host.docker.internal"
@@ -47,7 +47,7 @@ import logging  # noqa: E402
 
 
 # Per-scan logging is set up by ``setup_scan_logging`` from inside
-# ``orchestration.scan.run_strix_scan`` once the scan ``run_dir`` is
+# ``orchestration.runner.run_strix_scan`` once the scan ``run_dir`` is
 # known — that's where ``strix.*`` levels and handlers are owned. Pre-scan
 # work (``main()``, env validation, image pull) emits via the module
 # logger; once setup_scan_logging runs, those records start landing in
@@ -552,11 +552,11 @@ def _load_resume_state(args: argparse.Namespace, parser: argparse.ArgumentParser
 
 def display_completion_message(args: argparse.Namespace, results_path: Path) -> None:
     console = Console()
-    tracer = get_global_tracer()
+    scan_store = get_global_scan_store()
 
     scan_completed = False
-    if tracer and tracer.scan_results:
-        scan_completed = tracer.scan_results.get("scan_completed", False)
+    if scan_store and scan_store.scan_results:
+        scan_completed = scan_store.scan_results.get("scan_completed", False)
 
     completion_text = Text()
     if scan_completed:
@@ -575,7 +575,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
             target_text.append("\n        ")
             target_text.append(target_info["original"], style="white")
 
-    stats_text = build_final_stats_text(tracer)
+    stats_text = build_final_stats_text(scan_store)
 
     panel_parts: list[Text | str] = [completion_text, "\n\n", target_text]
 
@@ -753,16 +753,16 @@ def main() -> None:
         posthog.error("unhandled_exception", str(e))
         raise
     finally:
-        tracer = get_global_tracer()
-        if tracer:
-            posthog.end(tracer, exit_reason=exit_reason)
+        scan_store = get_global_scan_store()
+        if scan_store:
+            posthog.end(scan_store, exit_reason=exit_reason)
 
     results_path = Path("strix_runs") / args.run_name
     display_completion_message(args, results_path)
 
     if args.non_interactive:
-        tracer = get_global_tracer()
-        if tracer and tracer.vulnerability_reports:
+        scan_store = get_global_scan_store()
+        if scan_store and scan_store.vulnerability_reports:
             sys.exit(2)
 
 

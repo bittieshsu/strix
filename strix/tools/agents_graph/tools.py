@@ -1,13 +1,10 @@
 """Multi-agent graph tools backed by the SDK-native :class:`AgentCoordinator`.
 
 - ``view_agent_graph``: render the parent/child tree.
-- ``agent_status``: per-agent status + pending message count.
 - ``send_message_to_agent``: append a message to another agent's SDK session.
 - ``wait_for_message``: pause this agent until a message arrives or
   ``timeout_seconds`` elapses.
-- ``create_agent``: spawn a child via
-  ``asyncio.create_task(Runner.run(...))``; the task handle is stored
-  so a root-level cancel cascades to descendants.
+- ``create_agent``: asks the scan runner to spawn an addressable child.
 - ``agent_finish``: subagents only — posts a structured completion
   report to the parent's SDK session and returns a final-output marker.
 """
@@ -19,27 +16,11 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
-from agents import RunConfig, RunContextWrapper, function_tool
-from agents.items import TResponseInputItem
-from agents.model_settings import ModelSettings
-from agents.sandbox import SandboxRunConfig
+from agents import RunContextWrapper, function_tool
 
-from strix.llm.multi_provider_setup import build_multi_provider
-from strix.llm.retry import DEFAULT_RETRY
-from strix.orchestration.coordinator import (
-    coordinator_from_context,
-    open_agent_session,
-    run_with_continuation,
-)
-
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from agents import Agent as SDKAgent
+from strix.orchestration.coordinator import coordinator_from_context
 
 
 logger = logging.getLogger(__name__)
@@ -146,42 +127,6 @@ async def view_agent_graph(ctx: RunContextWrapper) -> str:
 
 
 @function_tool(timeout=30)
-async def agent_status(ctx: RunContextWrapper, agent_id: str) -> str:
-    """Look up one agent's lifecycle state + pending message count.
-
-    Use when you need precise state on a specific agent (e.g., "is the
-    XSS specialist still going?") rather than the full tree view.
-    Returns ``status`` (``running`` / ``waiting`` / ``completed`` /
-    ``crashed`` / ``stopped``), ``parent_id``, and ``pending_messages``.
-
-    Args:
-        agent_id: The 8-char id from ``view_agent_graph`` /
-            ``create_agent``.
-    """
-    inner = _ctx(ctx)
-    coordinator = coordinator_from_context(inner)
-    if coordinator is None:
-        return json.dumps(
-            {"success": False, "error": "Agent coordinator not initialized in context."},
-            ensure_ascii=False,
-            default=str,
-        )
-
-    info = await coordinator.agent_info(agent_id)
-    if info is None:
-        return json.dumps(
-            {
-                "success": False,
-                "error": f"Unknown agent_id: {agent_id}",
-            },
-            ensure_ascii=False,
-            default=str,
-        )
-    info["success"] = True
-    return json.dumps(info, ensure_ascii=False, default=str)
-
-
-@function_tool(timeout=30)
 async def send_message_to_agent(
     ctx: RunContextWrapper,
     target_agent_id: str,
@@ -191,8 +136,9 @@ async def send_message_to_agent(
 ) -> str:
     """Send a message to another agent's inbox — sparingly.
 
-    Inter-agent messages are surfaced at the top of the target's next
-    LLM turn. Use only when essential:
+    Inter-agent messages are appended to the target's SDK session and
+    interrupt any active target turn so the next run cycle sees them.
+    Use only when essential:
 
     - Sharing a discovered finding/credential another agent needs.
     - Asking a specialist a focused question.
@@ -202,8 +148,8 @@ async def send_message_to_agent(
     **Don't** use for routine "hello/status" pings, for context the
     target already has (children inherit parent history), or when
     parent/child completion via ``agent_finish`` already covers the
-    flow. Messages to any registered agent are queued, regardless of
-    status, so a follow-up can wake a completed/stopped/failed agent.
+    flow. Messages to any registered agent wake it, regardless of
+    status, so a follow-up can restart a completed/stopped/failed agent.
 
     Args:
         target_agent_id: Recipient's 8-char id.
@@ -249,7 +195,7 @@ async def send_message_to_agent(
             "success": True,
             "message_id": msg_id,
             "target_agent_id": target_agent_id,
-            "delivery_status": "queued",
+            "delivery_status": "delivered",
         },
         ensure_ascii=False,
         default=str,
@@ -269,7 +215,7 @@ def _session_items_payload(items: list[Any]) -> list[dict[str, Any]]:
 
 
 @function_tool(timeout=601)
-async def wait_for_message(
+async def wait_for_message(  # noqa: PLR0911
     ctx: RunContextWrapper,
     reason: str = "Waiting for messages from other agents",
     timeout_seconds: int = 600,
@@ -325,10 +271,8 @@ async def wait_for_message(
             default=str,
         )
 
-    pending = await coordinator.pending_count(me)
+    pending, items = await coordinator.consume_pending(me, include_items=True)
     if pending > 0:
-        items = await coordinator.recent_session_items(me, pending)
-        await coordinator.consume_wake(me)
         await coordinator.mark_running(me)
         return json.dumps(
             {
@@ -344,7 +288,6 @@ async def wait_for_message(
 
     if interactive:
         await coordinator.park_waiting(me)
-        inner["agent_waiting_called"] = True
         return json.dumps(
             {
                 "success": True,
@@ -388,9 +331,7 @@ async def wait_for_message(
             default=str,
         )
 
-    pending = await coordinator.pending_count(me)
-    items = await coordinator.recent_session_items(me, pending)
-    await coordinator.consume_wake(me)
+    pending, items = await coordinator.consume_pending(me, include_items=True)
     await coordinator.mark_running(me)
 
     return json.dumps(
@@ -456,7 +397,7 @@ async def create_agent(
     inner = _ctx(ctx)
     coordinator = coordinator_from_context(inner)
     parent_id = inner.get("agent_id")
-    factory: Callable[..., SDKAgent] | None = inner.get("agent_factory")
+    spawner = inner.get("spawn_child_agent")
 
     if coordinator is None or parent_id is None:
         return json.dumps(
@@ -464,155 +405,38 @@ async def create_agent(
             ensure_ascii=False,
             default=str,
         )
-    if factory is None:
+    if not callable(spawner):
         return json.dumps(
             {
                 "success": False,
-                "error": (
-                    "No agent_factory in context. "
-                    "The root assembly must inject one when building the run context."
-                ),
+                "error": "Scan runner did not provide a child-agent spawner in context.",
             },
             ensure_ascii=False,
             default=str,
         )
-
-    child_id = uuid.uuid4().hex[:8]
-
-    try:
-        child_agent = factory(name=name, skills=skills or [])
-    except Exception as e:
-        logger.exception("agent_factory raised while building child '%s'", name)
-        return json.dumps(
-            {
-                "success": False,
-                "error": f"agent_factory failed: {e!s}",
-            },
-            ensure_ascii=False,
-            default=str,
-        )
-
-    await coordinator.register(
-        child_id,
-        name,
-        parent_id,
-        task=task,
-        skills=list(skills or []),
-        is_whitebox=bool(inner.get("is_whitebox", False)),
-        scan_mode=str(inner.get("scan_mode", "deep")),
-        diff_scope=inner.get("diff_scope"),
-    )
 
     # ``ctx.turn_input`` carries the parent's full conversation up to and
-    # including the call that's currently invoking ``create_agent``
-    # (populated by SDK at ``run_internal/turn_resolution.py:806``).
-    # Wrap as a single read-only block so the child sees the parent's
-    # reasoning as background but doesn't try to continue parent's turns.
+    # including the call that's currently invoking ``create_agent``.
     parent_history = list(ctx.turn_input) if inherit_context and ctx.turn_input else []
-    initial_input: list[TResponseInputItem] = []
-    if parent_history:
-        rendered = json.dumps(parent_history, ensure_ascii=False, default=str)
-        initial_input.append(
-            {
-                "role": "user",
-                "content": (
-                    "== Inherited context from parent (background only) ==\n"
-                    f"{rendered}\n"
-                    "== End of inherited context ==\n"
-                    "Use the above as background only; do not continue the "
-                    "parent's work. Your task follows."
-                ),
-            },
+    try:
+        result = await spawner(
+            parent_ctx=inner,
+            name=name,
+            task=task,
+            skills=list(skills or []),
+            parent_history=parent_history,
         )
-    initial_input.append(
-        {
-            "role": "user",
-            "content": (
-                f"You are agent {name} ({child_id}); your parent is {parent_id}. "
-                f"Maintain your own identity. Call agent_finish when your task "
-                f"is complete."
-            ),
-        }
-    )
-    initial_input.append({"role": "user", "content": task})
-
-    child_ctx: dict[str, Any] = {
-        "coordinator": coordinator,
-        "sandbox_session": inner.get("sandbox_session"),
-        "sandbox_client": inner.get("sandbox_client"),
-        "caido_client": inner.get("caido_client"),
-        "agent_id": child_id,
-        "parent_id": parent_id,
-        "tracer": inner.get("tracer"),
-        "model": inner["model"],
-        "model_settings": inner.get("model_settings"),
-        "max_turns": int(inner.get("max_turns", 300)),
-        "agent_finish_called": False,
-        "is_whitebox": bool(inner.get("is_whitebox", False)),
-        "interactive": bool(inner.get("interactive", False)),
-        "scan_mode": str(inner.get("scan_mode", "deep")),
-        "diff_scope": inner.get("diff_scope"),
-        "run_id": inner.get("run_id"),
-        "agent_factory": factory,
-        # Stashed for ``agent_finish`` to echo back in its completion report.
-        "task": task,
-        # Inherited so ``create_agent`` calls from this child can also
-        # add their per-child sessions to the same teardown list.
-        "_sessions_to_close": inner.get("_sessions_to_close", []),
-    }
-
-    # Every agent gets its own SDK session_id inside the shared agents.db.
-    agents_db_path = inner.get("agents_db_path")
-    if not isinstance(agents_db_path, Path):
-        run_id = inner.get("run_id") or "default"
-        agents_db_path = Path.cwd() / "strix_runs" / str(run_id) / "agents.db"
-    child_session = open_agent_session(child_id, agents_db_path)
-    sessions_list = child_ctx.get("_sessions_to_close")
-    if isinstance(sessions_list, list):
-        sessions_list.append(child_session)
-    await coordinator.attach_runtime(child_id, session=child_session)
-
-    child_model_settings = ModelSettings(
-        parallel_tool_calls=False,
-        tool_choice="required",
-        retry=DEFAULT_RETRY,
-    )
-    override = inner.get("model_settings")
-    if override is not None:
-        child_model_settings = child_model_settings.resolve(override)
-    sandbox_session = inner.get("sandbox_session")
-    child_run_config = RunConfig(
-        model=inner["model"],
-        model_provider=build_multi_provider(),
-        model_settings=child_model_settings,
-        sandbox=(
-            SandboxRunConfig(client=inner.get("sandbox_client"), session=sandbox_session)
-            if sandbox_session is not None
-            else None
-        ),
-        tracing_disabled=False,
-        trace_include_sensitive_data=False,
-    )
-
-    task_handle = asyncio.create_task(
-        run_with_continuation(
-            agent=child_agent,
-            initial_input=initial_input,
-            run_config=child_run_config,
-            context=child_ctx,
-            max_turns=int(inner.get("max_turns", 300)),
-            coordinator=coordinator,
-            agent_id=child_id,
-            interactive=bool(inner.get("interactive", False)),
-            session=child_session,
-        ),
-        name=f"agent-{name}-{child_id}",
-    )
-    await coordinator.attach_runtime(child_id, task=task_handle)
+    except Exception as e:
+        logger.exception("create_agent: scan runner failed to spawn child '%s'", name)
+        return json.dumps(
+            {"success": False, "error": f"child spawn failed: {e!s}"},
+            ensure_ascii=False,
+            default=str,
+        )
 
     logger.info(
         "create_agent: spawned %s (%s) parent=%s skills=%d task_len=%d",
-        child_id,
+        result.get("agent_id"),
         name,
         parent_id or "-",
         len(skills or []),
@@ -620,13 +444,7 @@ async def create_agent(
     )
 
     return json.dumps(
-        {
-            "success": True,
-            "agent_id": child_id,
-            "name": name,
-            "parent_id": parent_id,
-            "message": f"Spawned '{name}' ({child_id}) running in parallel.",
-        },
+        result,
         ensure_ascii=False,
         default=str,
     )
@@ -700,10 +518,6 @@ async def agent_finish(
             default=str,
         )
 
-    # The coordinator settles lifecycle from this JSON final output after
-    # the SDK run finishes; the tool only sends the parent report.
-    inner["agent_finish_called"] = True
-
     parent_notified = False
     if report_to_parent:
         async with coordinator._lock:
@@ -736,6 +550,7 @@ async def agent_finish(
         len(findings or []),
         parent_notified,
     )
+    await coordinator.set_status(me, "completed")
 
     return json.dumps(
         {
@@ -798,7 +613,8 @@ async def stop_agent(
             ensure_ascii=False,
             default=str,
         )
-    if await coordinator.agent_info(target_agent_id) is None:
+    _, statuses, _ = await coordinator.graph_snapshot()
+    if target_agent_id not in statuses:
         return json.dumps(
             {"success": False, "error": f"Unknown agent_id: {target_agent_id}"},
             ensure_ascii=False,

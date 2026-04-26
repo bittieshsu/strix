@@ -13,9 +13,9 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.config import load_settings
-from strix.orchestration.scan import run_strix_scan
+from strix.orchestration.runner import run_strix_scan
 from strix.runtime import session_manager
-from strix.telemetry.tracer import Tracer, set_global_tracer
+from strix.telemetry.scan_store import ScanStore, set_global_scan_store
 
 from .utils import (
     build_live_stats_text,
@@ -95,8 +95,9 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         "resume_instruction": getattr(args, "user_explicit_instruction", None) or "",
     }
 
-    tracer = Tracer(args.run_name)
-    tracer.set_scan_config(scan_config)
+    scan_store = ScanStore(args.run_name)
+    scan_store.set_scan_config(scan_config)
+    scan_store.hydrate_from_run_dir()
 
     def display_vulnerability(report: dict[str, Any]) -> None:
         report_id = report.get("id", "unknown")
@@ -114,13 +115,13 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         console.print(vuln_panel)
         console.print()
 
-    tracer.vulnerability_found_callback = display_vulnerability
+    scan_store.vulnerability_found_callback = display_vulnerability
 
     def cleanup_on_exit() -> None:
-        tracer.cleanup()
+        scan_store.cleanup()
 
     def signal_handler(_signum: int, _frame: Any) -> None:
-        tracer.cleanup()
+        scan_store.cleanup()
         sys.exit(1)
 
     atexit.register(cleanup_on_exit)
@@ -129,14 +130,14 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, signal_handler)
 
-    set_global_tracer(tracer)
+    set_global_scan_store(scan_store)
 
     def create_live_status() -> Panel:
         status_text = Text()
         status_text.append("Penetration test in progress", style="bold #22c55e")
         status_text.append("\n\n")
 
-        stats_text = build_live_stats_text(tracer)
+        stats_text = build_live_stats_text(scan_store)
         if stats_text:
             status_text.append(stats_text)
 
@@ -179,7 +180,6 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
                     scan_id=args.run_name,
                     image=_resolve_sandbox_image(),
                     local_sources=getattr(args, "local_sources", None) or [],
-                    tracer=tracer,
                     interactive=bool(getattr(args, "interactive", False)),
                 )
             finally:
@@ -196,7 +196,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         console.print(f"[bold red]Error during penetration test:[/] {e}")
         raise
 
-    if tracer.final_scan_result:
+    if scan_store.final_scan_result:
         console.print()
 
         final_report_text = Text()
@@ -206,7 +206,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
             Text.assemble(
                 final_report_text,
                 "\n\n",
-                tracer.final_scan_result,
+                scan_store.final_scan_result,
             ),
             title="[bold white]STRIX",
             title_align="left",

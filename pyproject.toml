@@ -194,11 +194,6 @@ ignore = [
 "strix/tools/**/*.py" = [
     "ARG001", # Unused function argument (tools may have unused args for interface consistency)
 ]
-# SDK lifecycle hooks have a fixed signature — unused args are part of the contract.
-"strix/orchestration/hooks.py" = [
-    "ARG002", # Unused method argument (RunHooks signature is set by SDK)
-    "TC002",  # ModelResponse, RunContextWrapper, AgentHookContext are annotation-only
-]
 # Anthropic cache wrapper inherits from LitellmModel; signature shadows builtin `input`.
 "strix/llm/anthropic_cache_wrapper.py" = [
     "A002",   # Argument shadows builtin (parent signature uses `input`)
@@ -209,9 +204,6 @@ ignore = [
 # Backend factories import their backend's deps lazily so deployments
 # that pick a different backend don't need every backend's libs installed.
 "strix/runtime/backends.py" = ["PLC0415"]
-# The vulnerability MD renderer is a long monolithic format function;
-# splitting per-section would obscure the structure without simplifying.
-"strix/telemetry/scan_artifacts.py" = ["PLR0912", "PLR0915", "PERF401"]
 "strix/runtime/docker_client.py" = [
     "TC002",  # Manifest, Container imported for annotations
     "TC003",  # uuid imported for annotation
@@ -234,13 +226,13 @@ ignore = [
 "strix/agents/factory.py" = ["TC002"]
 # Entry point: ``Path`` is used at runtime by the typing of the
 # session_manager call; importing under TYPE_CHECKING would defer
-# resolution past where mypy needs it. ``_build_root_task`` legitimately
+# resolution past where mypy needs it. ``build_root_task`` legitimately
 # walks every supported target type — splitting it into per-type
 # helpers would add indirection without simplifying anything.
-"strix/orchestration/scan.py" = ["TC003", "PLR0912", "PLR0915", "PLC0415"]
-# Tracer carries a long event surface and a runtime ``Callable``
-# annotation on ``vulnerability_found_callback``.
-"strix/telemetry/tracer.py" = ["TC003", "PLR0912", "PLR0915", "E501"]
+"strix/orchestration/runner.py" = ["TC003", "PLR0912", "PLR0915", "PLC0415"]
+# ScanStore carries scan artifact/report fields, artifact rendering, and
+# a runtime ``Callable`` annotation on ``vulnerability_found_callback``.
+"strix/telemetry/scan_store.py" = ["TC003", "PLR0912", "PLR0915", "E501", "PERF401"]
 # Interface utility branches per scope-mode / target-type combination;
 # splitting would obscure the decision tree without simplifying it.
 "strix/interface/utils.py" = ["PLR0912", "BLE001", "PLC0415"]
@@ -249,7 +241,6 @@ ignore = [
 "strix/interface/cli.py" = ["BLE001", "PLC0415"]
 "strix/interface/tui.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915", "SIM105"]
 "strix/interface/main.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
-"strix/interface/streaming_parser.py" = ["PLC0415"]
 "strix/interface/tool_components/agent_message_renderer.py" = ["PLC0415"]
 
 [tool.ruff.lint.isort]

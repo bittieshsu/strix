@@ -1,10 +1,14 @@
 from . import posthog
-from .tracer import Tracer, get_global_tracer, set_global_tracer
+from .scan_store import (
+    ScanStore,
+    get_global_scan_store,
+    set_global_scan_store,
+)
 
 
 __all__ = [
-    "Tracer",
-    "get_global_tracer",
+    "ScanStore",
+    "get_global_scan_store",
     "posthog",
-    "set_global_tracer",
+    "set_global_scan_store",
 ]

@@ -67,7 +67,7 @@ async def create_or_reuse(
 
     # Build Manifest entries keyed by ``workspace_subdir`` — the SDK
     # mounts each at ``/workspace/<key>``, which is exactly the path
-    # ``_build_root_task`` puts in the agent's task prompt. Mounting
+    # ``build_root_task`` puts in the agent's task prompt. Mounting
     # only the listed source dirs (not their parent) avoids leaking
     # unrelated host content into the sandbox.
     entries: dict[str | Path, BaseEntry] = {}

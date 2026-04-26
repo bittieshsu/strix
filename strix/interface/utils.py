@@ -23,16 +23,6 @@ from rich.text import Text
 from strix.config import load_settings
 
 
-# Token formatting utilities
-def format_token_count(count: float) -> str:
-    count = int(count)
-    if count >= 1_000_000:
-        return f"{count / 1_000_000:.1f}M"
-    if count >= 1_000:
-        return f"{count / 1_000:.1f}K"
-    return str(count)
-
-
 # Display utilities
 def get_severity_color(severity: str) -> str:
     severity_colors = {
@@ -206,13 +196,13 @@ def format_vulnerability_report(report: dict[str, Any]) -> Text:  # noqa: PLR091
     return text
 
 
-def _build_vulnerability_stats(stats_text: Text, tracer: Any) -> None:
+def _build_vulnerability_stats(stats_text: Text, scan_store: Any) -> None:
     """Build vulnerability section of stats text."""
-    vuln_count = len(tracer.vulnerability_reports)
+    vuln_count = len(scan_store.vulnerability_reports)
 
     if vuln_count > 0:
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-        for report in tracer.vulnerability_reports:
+        for report in scan_store.vulnerability_reports:
             severity = report.get("severity", "").lower()
             if severity in severity_counts:
                 severity_counts[severity] += 1
@@ -245,63 +235,20 @@ def _build_vulnerability_stats(stats_text: Text, tracer: Any) -> None:
         stats_text.append("\n")
 
 
-def _build_llm_stats(stats_text: Text, total_stats: dict[str, Any]) -> None:
-    """Build LLM usage section of stats text."""
-    if total_stats["requests"] > 0:
-        stats_text.append("\n")
-        stats_text.append("Input Tokens ", style="dim")
-        stats_text.append(format_token_count(total_stats["input_tokens"]), style="white")
-
-        if total_stats["cached_tokens"] > 0:
-            stats_text.append("  ·  ", style="dim white")
-            stats_text.append("Cached Tokens ", style="dim")
-            stats_text.append(format_token_count(total_stats["cached_tokens"]), style="white")
-
-        stats_text.append("  ·  ", style="dim white")
-        stats_text.append("Output Tokens ", style="dim")
-        stats_text.append(format_token_count(total_stats["output_tokens"]), style="white")
-
-        if total_stats["cost"] > 0:
-            stats_text.append(" · ", style="dim white")
-            stats_text.append("Cost ", style="dim")
-            stats_text.append(f"${total_stats['cost']:.4f}", style="bold #fbbf24")
-    else:
-        stats_text.append("\n")
-        stats_text.append("Cost ", style="dim")
-        stats_text.append("$0.0000 ", style="#fbbf24")
-        stats_text.append("· ", style="dim white")
-        stats_text.append("Tokens ", style="dim")
-        stats_text.append("0", style="white")
-
-
-def build_final_stats_text(tracer: Any) -> Text:
-    """Build stats text for final output with detailed messages and LLM usage."""
+def build_final_stats_text(scan_store: Any) -> Text:
+    """Build final stats from Strix-owned scan artifacts."""
     stats_text = Text()
-    if not tracer:
+    if not scan_store:
         return stats_text
 
-    _build_vulnerability_stats(stats_text, tracer)
-
-    tool_count = tracer.get_real_tool_count()
-    agent_count = len(tracer.agents)
-
-    stats_text.append("Agents", style="dim")
-    stats_text.append("  ")
-    stats_text.append(str(agent_count), style="bold white")
-    stats_text.append("  ·  ", style="dim white")
-    stats_text.append("Tools", style="dim")
-    stats_text.append("  ")
-    stats_text.append(str(tool_count), style="bold white")
-
-    llm_stats = tracer.get_total_llm_stats()
-    _build_llm_stats(stats_text, llm_stats["total"])
+    _build_vulnerability_stats(stats_text, scan_store)
 
     return stats_text
 
 
-def build_live_stats_text(tracer: Any) -> Text:
+def build_live_stats_text(scan_store: Any) -> Text:
     stats_text = Text()
-    if not tracer:
+    if not scan_store:
         return stats_text
 
     model = load_settings().llm.model or "unknown"
@@ -309,16 +256,13 @@ def build_live_stats_text(tracer: Any) -> Text:
     stats_text.append(str(model), style="white")
     stats_text.append("\n")
 
-    vuln_count = len(tracer.vulnerability_reports)
-    tool_count = tracer.get_real_tool_count()
-    agent_count = len(tracer.agents)
-
+    vuln_count = len(scan_store.vulnerability_reports)
     stats_text.append("Vulnerabilities ", style="dim")
     stats_text.append(f"{vuln_count}", style="white")
     stats_text.append("\n")
     if vuln_count > 0:
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-        for report in tracer.vulnerability_reports:
+        for report in scan_store.vulnerability_reports:
             severity = report.get("severity", "").lower()
             if severity in severity_counts:
                 severity_counts[severity] += 1
@@ -340,57 +284,18 @@ def build_live_stats_text(tracer: Any) -> Text:
 
         stats_text.append("\n")
 
-    stats_text.append("Agents ", style="dim")
-    stats_text.append(str(agent_count), style="white")
-    stats_text.append("  ·  ", style="dim white")
-    stats_text.append("Tools ", style="dim")
-    stats_text.append(str(tool_count), style="white")
-
-    llm_stats = tracer.get_total_llm_stats()
-    total_stats = llm_stats["total"]
-
-    stats_text.append("\n")
-
-    stats_text.append("Input Tokens ", style="dim")
-    stats_text.append(format_token_count(total_stats["input_tokens"]), style="white")
-
-    stats_text.append("  ·  ", style="dim white")
-    stats_text.append("Cached Tokens ", style="dim")
-    stats_text.append(format_token_count(total_stats["cached_tokens"]), style="white")
-
-    stats_text.append("\n")
-
-    stats_text.append("Output Tokens ", style="dim")
-    stats_text.append(format_token_count(total_stats["output_tokens"]), style="white")
-
-    stats_text.append("  ·  ", style="dim white")
-    stats_text.append("Cost ", style="dim")
-    stats_text.append(f"${total_stats['cost']:.4f}", style="#fbbf24")
-
     return stats_text
 
 
-def build_tui_stats_text(tracer: Any) -> Text:
+def build_tui_stats_text(scan_store: Any) -> Text:
     stats_text = Text()
-    if not tracer:
+    if not scan_store:
         return stats_text
 
     model = load_settings().llm.model or "unknown"
     stats_text.append(str(model), style="white")
 
-    llm_stats = tracer.get_total_llm_stats()
-    total_stats = llm_stats["total"]
-
-    total_tokens = total_stats["input_tokens"] + total_stats["output_tokens"]
-    if total_tokens > 0:
-        stats_text.append("\n")
-        stats_text.append(f"{format_token_count(total_tokens)} tokens", style="white")
-
-    if total_stats["cost"] > 0:
-        stats_text.append(" · ", style="white")
-        stats_text.append(f"${total_stats['cost']:.2f}", style="white")
-
-    caido_url = getattr(tracer, "caido_url", None)
+    caido_url = getattr(scan_store, "caido_url", None)
     if caido_url:
         stats_text.append("\n")
         stats_text.append("Caido: ", style="bold white")

@@ -11,7 +11,7 @@ from strix.config import load_settings
 
 
 if TYPE_CHECKING:
-    from strix.telemetry.tracer import Tracer
+    from strix.telemetry.scan_store import ScanStore
 
 
 logger = logging.getLogger(__name__)
@@ -114,22 +114,19 @@ def finding(severity: str) -> None:
     )
 
 
-def end(tracer: "Tracer", exit_reason: str = "completed") -> None:
+def end(scan_store: "ScanStore", exit_reason: str = "completed") -> None:
     vulnerabilities_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-    for v in tracer.vulnerability_reports:
+    for v in scan_store.vulnerability_reports:
         sev = v.get("severity", "info").lower()
         if sev in vulnerabilities_counts:
             vulnerabilities_counts[sev] += 1
-
-    llm = tracer.get_total_llm_stats()
-    total = llm.get("total", {})
 
     duration = 0.0
     try:
         from datetime import datetime
 
-        start = datetime.fromisoformat(tracer.start_time.replace("Z", "+00:00"))
-        end_iso = tracer.end_time or datetime.now(start.tzinfo).isoformat()
+        start = datetime.fromisoformat(scan_store.start_time.replace("Z", "+00:00"))
+        end_iso = scan_store.end_time or datetime.now(start.tzinfo).isoformat()
         duration = (datetime.fromisoformat(end_iso.replace("Z", "+00:00")) - start).total_seconds()
     except (ValueError, TypeError, AttributeError):
         pass
@@ -140,12 +137,8 @@ def end(tracer: "Tracer", exit_reason: str = "completed") -> None:
             **_base_props(),
             "exit_reason": exit_reason,
             "duration_seconds": round(duration),
-            "vulnerabilities_total": len(tracer.vulnerability_reports),
+            "vulnerabilities_total": len(scan_store.vulnerability_reports),
             **{f"vulnerabilities_{k}": v for k, v in vulnerabilities_counts.items()},
-            "agent_count": len(tracer.agents),
-            "tool_count": tracer.get_real_tool_count(),
-            "llm_tokens": llm.get("total_tokens", 0),
-            "llm_cost": total.get("cost", 0.0),
         },
     )
 

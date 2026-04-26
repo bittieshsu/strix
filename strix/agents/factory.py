@@ -29,7 +29,6 @@ from agents.tool import Tool
 from strix.agents.prompt import render_system_prompt
 from strix.tools.agents_graph.tools import (
     agent_finish,
-    agent_status,
     create_agent,
     send_message_to_agent,
     stop_agent,
@@ -163,7 +162,6 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     python_action,
     # Multi-agent graph tools (the coordinator is in ctx.context)
     view_agent_graph,
-    agent_status,
     send_message_to_agent,
     wait_for_message,
     create_agent,

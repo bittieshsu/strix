@@ -151,7 +151,7 @@ _REQUIRED_FIELDS = {
 }
 
 
-async def _do_create(  # noqa: PLR0912
+async def _do_create(  # noqa: PLR0912, PLR0915
     *,
     title: str,
     description: str,
@@ -167,6 +167,8 @@ async def _do_create(  # noqa: PLR0912
     cve: str | None,
     cwe: str | None,
     code_locations: list[dict[str, Any]] | None,
+    agent_id: str | None = None,
+    agent_name: str | None = None,
 ) -> dict[str, Any]:
     errors: list[str] = []
     fields = {
@@ -212,20 +214,20 @@ async def _do_create(  # noqa: PLR0912
     cvss_score, severity, _vector = _calculate_cvss(cvss_breakdown)
 
     try:
-        from strix.telemetry.tracer import get_global_tracer
+        from strix.telemetry.scan_store import get_global_scan_store
 
-        tracer = get_global_tracer()
-        if tracer is None:
-            logger.warning("No global tracer; vulnerability report not persisted")
+        scan_store = get_global_scan_store()
+        if scan_store is None:
+            logger.warning("No global scan store; vulnerability report not persisted")
             return {
                 "success": True,
                 "message": f"Vulnerability report '{title}' created (not persisted)",
-                "warning": "Report could not be persisted - tracer unavailable",
+                "warning": "Report could not be persisted - scan store unavailable",
             }
 
         from strix.llm.dedupe import check_duplicate
 
-        existing = tracer.get_existing_vulnerabilities()
+        existing = scan_store.get_existing_vulnerabilities()
         candidate = {
             "title": title,
             "description": description,
@@ -256,7 +258,7 @@ async def _do_create(  # noqa: PLR0912
                 "reason": dedupe.get("reason", ""),
             }
 
-        report_id = tracer.add_vulnerability_report(
+        report_id = scan_store.add_vulnerability_report(
             title=title,
             description=description,
             severity=severity,
@@ -273,6 +275,8 @@ async def _do_create(  # noqa: PLR0912
             cve=cve,
             cwe=cwe,
             code_locations=parsed_locations,
+            agent_id=agent_id if isinstance(agent_id, str) else None,
+            agent_name=agent_name if isinstance(agent_name, str) else None,
         )
     except (ImportError, AttributeError) as e:
         logger.exception("create_vulnerability_report persistence failed")
@@ -404,6 +408,17 @@ async def create_vulnerability_report(
             ``fix_before`` (verbatim source), ``fix_after`` (suggested
             replacement).
     """
+    inner = ctx.context if isinstance(ctx.context, dict) else {}
+    raw_agent_id = inner.get("agent_id")
+    agent_id = raw_agent_id if isinstance(raw_agent_id, str) else None
+    agent_name = None
+    coordinator = inner.get("coordinator")
+    if agent_id is not None and coordinator is not None:
+        names = getattr(coordinator, "names", {})
+        if isinstance(names, dict):
+            raw_agent_name = names.get(agent_id)
+            agent_name = raw_agent_name if isinstance(raw_agent_name, str) else None
+
     result = await _do_create(
         title=title,
         description=description,
@@ -419,5 +434,7 @@ async def create_vulnerability_report(
         cve=cve,
         cwe=cwe,
         code_locations=code_locations,
+        agent_id=agent_id,
+        agent_name=agent_name,
     )
     return json.dumps(result, ensure_ascii=False, default=str)

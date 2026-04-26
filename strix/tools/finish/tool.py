@@ -44,24 +44,24 @@ def _do_finish(
         return {"success": False, "message": "Validation failed", "errors": errors}
 
     try:
-        from strix.telemetry.tracer import get_global_tracer
+        from strix.telemetry.scan_store import get_global_scan_store
 
-        tracer = get_global_tracer()
-        if tracer is None:
-            logger.warning("No global tracer; scan results not persisted")
+        scan_store = get_global_scan_store()
+        if scan_store is None:
+            logger.warning("No global scan store; scan results not persisted")
             return {
                 "success": True,
                 "scan_completed": True,
                 "message": "Scan completed (not persisted)",
-                "warning": "Results could not be persisted - tracer unavailable",
+                "warning": "Results could not be persisted - scan store unavailable",
             }
-        tracer.update_scan_final_fields(
+        scan_store.update_scan_final_fields(
             executive_summary=executive_summary.strip(),
             methodology=methodology.strip(),
             technical_analysis=technical_analysis.strip(),
             recommendations=recommendations.strip(),
         )
-        vuln_count = len(tracer.vulnerability_reports)
+        vuln_count = len(scan_store.vulnerability_reports)
     except (ImportError, AttributeError) as e:
         logger.exception("finish_scan persistence failed")
         return {"success": False, "message": f"Failed to complete scan: {e!s}"}
@@ -98,8 +98,8 @@ async def finish_scan(
     **Pre-flight checklist (mandatory — do not skip):**
 
     1. **Call ``view_agent_graph`` first.** Inspect every entry in the
-       summary. If ANY agent is in ``running`` / ``waiting`` /
-       ``llm_failed`` state, you MUST NOT call ``finish_scan`` yet —
+       summary. If ANY agent is in ``running`` / ``waiting`` state,
+       you MUST NOT call ``finish_scan`` yet —
        wrap them up first via ``send_message_to_agent`` (ask them to
        finish), ``wait_for_message`` (block until their report
        arrives), or ``stop_agent`` (graceful cancel). Only ``completed``
@@ -178,6 +178,11 @@ async def finish_scan(
         technical_analysis=technical_analysis,
         recommendations=recommendations,
     )
-    if result.get("success") and result.get("scan_completed"):
-        inner["finish_scan_called"] = True
+    if (
+        result.get("success")
+        and result.get("scan_completed")
+        and coordinator is not None
+        and isinstance(me, str)
+    ):
+        await coordinator.set_status(me, "completed")
     return json.dumps(result, ensure_ascii=False, default=str)

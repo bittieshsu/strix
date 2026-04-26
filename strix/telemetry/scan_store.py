@@ -1,5 +1,7 @@
+import csv
 import json
 import logging
+import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7,32 +9,31 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from strix.telemetry import posthog
-from strix.telemetry.scan_artifacts import ScanArtifactWriter
 
 
 logger = logging.getLogger(__name__)
 
-_global_tracer: Optional["Tracer"] = None
+_global_scan_store: Optional["ScanStore"] = None
+_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
-def get_global_tracer() -> Optional["Tracer"]:
-    return _global_tracer
+def get_global_scan_store() -> Optional["ScanStore"]:
+    return _global_scan_store
 
 
-def set_global_tracer(tracer: "Tracer") -> None:
-    global _global_tracer  # noqa: PLW0603
-    _global_tracer = tracer
+def set_global_scan_store(scan_store: "ScanStore") -> None:
+    global _global_scan_store  # noqa: PLW0603
+    _global_scan_store = scan_store
 
 
-class Tracer:
-    """Per-scan in-memory state the TUI renders + per-scan artifact writer.
+class ScanStore:
+    """Per-scan product artifact state plus artifact writer.
 
-    Holds live state the TUI reads (chat messages, agent tree, tool
-    executions, vulnerability reports, LLM usage). Writes vulnerability
-    markdown + CSV + final pentest report to ``strix_runs/<scan>/``.
+    The Agents SDK owns model/tool execution, tracing, and conversation
+    persistence. This store keeps only Strix-owned scan artifacts and
+    report metadata. Live UI projections belong to the interface layer.
 
-    Conversation history goes to the SDK's ``SQLiteSession`` instead;
-    SDK trace events are not persisted here.
+    It is not a trace mirror and does not consume SDK tracing processors.
     """
 
     def __init__(self, run_name: str | None = None):
@@ -41,22 +42,8 @@ class Tracer:
         self.start_time = datetime.now(UTC).isoformat()
         self.end_time: str | None = None
 
-        self.agents: dict[str, dict[str, Any]] = {}
-        self.tool_executions: dict[int, dict[str, Any]] = {}
-        self.chat_messages: list[dict[str, Any]] = []
-        self._next_exec_id = 1
-
         self.vulnerability_reports: list[dict[str, Any]] = []
         self.final_scan_result: str | None = None
-
-        # LLM usage roll-up across all agents in this run.
-        self._llm_stats: dict[str, Any] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cached_tokens": 0,
-            "cost": 0.0,
-            "requests": 0,
-        }
 
         self.scan_results: dict[str, Any] | None = None
         self.scan_config: dict[str, Any] | None = None
@@ -69,8 +56,7 @@ class Tracer:
             "status": "running",
         }
         self._run_dir: Path | None = None
-        self._writer: ScanArtifactWriter | None = None
-        self._next_message_id = 1
+        self._saved_vuln_ids: set[str] = set()
 
         self.caido_url: str | None = None
         self.vulnerability_found_callback: Callable[[dict[str, Any]], None] | None = None
@@ -81,7 +67,7 @@ class Tracer:
         self.run_metadata["run_name"] = run_name
         self.run_metadata["run_id"] = run_name
         self._run_dir = None
-        self._writer = None
+        self._saved_vuln_ids.clear()
 
     def get_run_dir(self) -> Path:
         if self._run_dir is None:
@@ -135,11 +121,7 @@ class Tracer:
                         if k in {"run_id", "run_name", "start_time", "targets", "status"}
                     },
                 )
-                logger.info(
-                    "tracer hydrated run_metadata from %s (start_time=%s)",
-                    meta_path,
-                    self.start_time,
-                )
+                logger.info("scan store hydrated run_metadata from %s", meta_path)
 
         json_path = run_dir / "vulnerabilities.json"
         if json_path.exists():
@@ -156,85 +138,13 @@ class Tracer:
                     f"vulnerabilities.json at {json_path} is not a list",
                 )
             self.vulnerability_reports = [r for r in data if isinstance(r, dict)]
-            writer = self._get_writer()
             for r in self.vulnerability_reports:
                 rid = r.get("id")
                 if isinstance(rid, str):
-                    writer._saved_vuln_ids.add(rid)
+                    self._saved_vuln_ids.add(rid)
             logger.info(
-                "tracer hydrated %d vulnerability report(s) from %s",
-                len(self.vulnerability_reports),
-                json_path,
+                "scan store hydrated %d vulnerability report(s)", len(self.vulnerability_reports)
             )
-
-        agents_path = run_dir / "agents.json"
-        if agents_path.exists():
-            try:
-                agents_data = json.loads(agents_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                # Caller will surface this same corruption via coordinator restore;
-                # no need to fail twice. Skip the agents/stats hydrate path.
-                agents_data = None
-            if isinstance(agents_data, dict):
-                self._hydrate_agents_tree(agents_data)
-                self._hydrate_llm_stats(agents_data)
-
-    def _hydrate_agents_tree(self, agents_data: dict[str, Any]) -> None:
-        """Populate ``self.agents`` from the coordinator snapshot.
-
-        Without this, the TUI tree on resume would only show agents
-        currently running (mirrored by ``on_agent_start``); completed /
-        crashed / stopped children from the prior run would be invisible
-        even though the coordinator knows about them.
-        """
-        statuses = agents_data.get("statuses") or {}
-        names = agents_data.get("names") or {}
-        parent_of = agents_data.get("parent_of") or {}
-        if not isinstance(statuses, dict):
-            return
-        timestamp = self.start_time
-        for agent_id, status in statuses.items():
-            if not isinstance(agent_id, str):
-                continue
-            self.agents[agent_id] = {
-                "id": agent_id,
-                "name": names.get(agent_id, agent_id) if isinstance(names, dict) else agent_id,
-                "parent_id": parent_of.get(agent_id) if isinstance(parent_of, dict) else None,
-                "status": status,
-                "created_at": timestamp,
-                "updated_at": timestamp,
-            }
-        logger.info("tracer hydrated %d agent(s) into tree", len(self.agents))
-
-    def _hydrate_llm_stats(self, agents_data: dict[str, Any]) -> None:
-        """Seed ``self._llm_stats`` from the coordinator snapshot's counters.
-
-        This keeps the resumed scan's TUI footer cumulative instead of
-        resetting to zero.
-        """
-        totals = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "requests": 0}
-        bucket = agents_data.get("stats_live") or {}
-        if isinstance(bucket, dict):
-            for entry in bucket.values():
-                if isinstance(entry, dict):
-                    totals["input_tokens"] += int(entry.get("in", 0) or 0)
-                    totals["output_tokens"] += int(entry.get("out", 0) or 0)
-                    totals["cached_tokens"] += int(entry.get("cached", 0) or 0)
-                    totals["requests"] += int(entry.get("calls", 0) or 0)
-        for k, v in totals.items():
-            self._llm_stats[k] = v
-        logger.info(
-            "tracer hydrated llm stats from agents snapshot (in=%d out=%d cached=%d requests=%d)",
-            totals["input_tokens"],
-            totals["output_tokens"],
-            totals["cached_tokens"],
-            totals["requests"],
-        )
-
-    def _get_writer(self) -> ScanArtifactWriter:
-        if self._writer is None:
-            self._writer = ScanArtifactWriter(self.get_run_dir())
-        return self._writer
 
     def add_vulnerability_report(
         self,
@@ -254,6 +164,8 @@ class Tracer:
         cve: str | None = None,
         cwe: str | None = None,
         code_locations: list[dict[str, Any]] | None = None,
+        agent_id: str | None = None,
+        agent_name: str | None = None,
     ) -> str:
         report_id = f"vuln-{len(self.vulnerability_reports) + 1:04d}"
 
@@ -292,6 +204,10 @@ class Tracer:
             report["cwe"] = cwe.strip()
         if code_locations:
             report["code_locations"] = code_locations
+        if agent_id:
+            report["agent_id"] = agent_id
+        if agent_name:
+            report["agent_name"] = agent_name
 
         self.vulnerability_reports.append(report)
         logger.info(f"Added vulnerability report: {report_id} - {title}")
@@ -343,28 +259,6 @@ class Tracer:
         self.save_run_data(mark_complete=True)
         posthog.end(self, exit_reason="finished_by_tool")
 
-    def log_chat_message(
-        self,
-        content: str,
-        role: str,
-        agent_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> int:
-        message_id = self._next_message_id
-        self._next_message_id += 1
-
-        self.chat_messages.append(
-            {
-                "message_id": message_id,
-                "content": content,
-                "role": role,
-                "agent_id": agent_id,
-                "timestamp": datetime.now(UTC).isoformat(),
-                "metadata": metadata or {},
-            }
-        )
-        return message_id
-
     def set_scan_config(self, config: dict[str, Any]) -> None:
         self.scan_config = config
         self.run_metadata.update(
@@ -382,91 +276,180 @@ class Tracer:
             self.run_metadata["end_time"] = self.end_time
             self.run_metadata["status"] = "completed"
 
-        self._get_writer().save(
-            vulnerability_reports=self.vulnerability_reports,
-            final_scan_result=self.final_scan_result,
-            run_metadata=dict(self.run_metadata),
-        )
-
-    def log_tool_start(
-        self,
-        agent_id: str,
-        tool_name: str,
-        args: dict[str, Any] | None = None,
-    ) -> int:
-        """Record a tool invocation in flight. Returns an exec_id."""
-        exec_id = self._next_exec_id
-        self._next_exec_id += 1
-        self.tool_executions[exec_id] = {
-            "agent_id": agent_id,
-            "tool_name": tool_name,
-            "args": args or {},
-            "status": "running",
-            "result": None,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-        return exec_id
-
-    def log_tool_end(self, agent_id: str, tool_name: str, result: Any) -> None:
-        """Mark the most recent matching exec as completed."""
-        for exec_id in reversed(self.tool_executions):
-            entry = self.tool_executions[exec_id]
-            if (
-                entry.get("agent_id") == agent_id
-                and entry.get("tool_name") == tool_name
-                and entry.get("status") == "running"
-            ):
-                entry["status"] = "completed"
-                entry["result"] = result
-                return
-        # No matching start (e.g. hooks added later in life) — record as completed.
-        exec_id = self._next_exec_id
-        self._next_exec_id += 1
-        self.tool_executions[exec_id] = {
-            "agent_id": agent_id,
-            "tool_name": tool_name,
-            "status": "completed",
-            "result": result,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-
-    def get_real_tool_count(self) -> int:
-        return sum(
-            1
-            for exec_data in list(self.tool_executions.values())
-            if exec_data.get("tool_name") not in ["scan_start_info", "subagent_start_info"]
-        )
-
-    def get_total_llm_stats(self) -> dict[str, Any]:
-        """Snapshot the run's aggregated LLM usage."""
-        stats = self._llm_stats
-        total = {
-            "input_tokens": int(stats["input_tokens"]),
-            "output_tokens": int(stats["output_tokens"]),
-            "cached_tokens": int(stats["cached_tokens"]),
-            "cost": round(float(stats["cost"]), 4),
-            "requests": int(stats["requests"]),
-        }
-        return {
-            "total": total,
-            "total_tokens": total["input_tokens"] + total["output_tokens"],
-        }
-
-    def record_llm_usage(
-        self,
-        *,
-        input_tokens: int = 0,
-        output_tokens: int = 0,
-        cached_tokens: int = 0,
-        cost: float = 0.0,
-        requests: int = 1,
-    ) -> None:
-        """Accumulate LLM usage from the orchestration hooks."""
-        self._llm_stats["input_tokens"] += input_tokens
-        self._llm_stats["output_tokens"] += output_tokens
-        self._llm_stats["cached_tokens"] += cached_tokens
-        self._llm_stats["cost"] += cost
-        self._llm_stats["requests"] += requests
+        self._save_artifacts()
 
     def cleanup(self) -> None:
         self.save_run_data(mark_complete=True)
+
+    def _save_artifacts(self) -> None:
+        """Write scan artifacts under ``run_dir``."""
+        run_dir = self.get_run_dir()
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+            if self.final_scan_result:
+                self._write_executive_report(run_dir)
+
+            if self.vulnerability_reports:
+                self._write_vulnerabilities(run_dir)
+
+            _atomic_write_text(
+                run_dir / "run_metadata.json",
+                json.dumps(self.run_metadata, ensure_ascii=False, indent=2, default=str),
+            )
+
+            logger.info("Essential scan data saved to: %s", run_dir)
+        except (OSError, RuntimeError):
+            logger.exception("Failed to save scan data")
+
+    def _write_executive_report(self, run_dir: Path) -> None:
+        path = run_dir / "penetration_test_report.md"
+        with path.open("w", encoding="utf-8") as f:
+            f.write("# Security Penetration Test Report\n\n")
+            f.write(f"**Generated:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
+            f.write(f"{self.final_scan_result}\n")
+        logger.info("Saved final penetration test report to: %s", path)
+
+    def _write_vulnerabilities(self, run_dir: Path) -> None:
+        vuln_dir = run_dir / "vulnerabilities"
+        vuln_dir.mkdir(exist_ok=True)
+
+        new_reports = [r for r in self.vulnerability_reports if r["id"] not in self._saved_vuln_ids]
+
+        for report in new_reports:
+            (vuln_dir / f"{report['id']}.md").write_text(
+                _render_vulnerability_md(report),
+                encoding="utf-8",
+            )
+            self._saved_vuln_ids.add(report["id"])
+
+        sorted_reports = sorted(
+            self.vulnerability_reports,
+            key=lambda r: (_SEVERITY_ORDER.get(r["severity"], 5), r["timestamp"]),
+        )
+        csv_path = run_dir / "vulnerabilities.csv"
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            fieldnames = ["id", "title", "severity", "timestamp", "file"]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for report in sorted_reports:
+                writer.writerow(
+                    {
+                        "id": report["id"],
+                        "title": report["title"],
+                        "severity": report["severity"].upper(),
+                        "timestamp": report["timestamp"],
+                        "file": f"vulnerabilities/{report['id']}.md",
+                    },
+                )
+
+        _atomic_write_text(
+            run_dir / "vulnerabilities.json",
+            json.dumps(self.vulnerability_reports, ensure_ascii=False, indent=2, default=str),
+        )
+
+        if new_reports:
+            logger.info(
+                "Saved %d new vulnerability report(s) to: %s",
+                len(new_reports),
+                vuln_dir,
+            )
+        logger.info("Updated vulnerability index: %s", csv_path)
+
+
+def _atomic_write_text(path: Path, payload: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as tmp:
+        tmp.write(payload)
+        tmp_path = Path(tmp.name)
+    tmp_path.replace(path)
+
+
+def _render_vulnerability_md(report: dict[str, Any]) -> str:
+    lines: list[str] = [
+        f"# {report.get('title', 'Untitled Vulnerability')}\n",
+        f"**ID:** {report.get('id', 'unknown')}",
+        f"**Severity:** {report.get('severity', 'unknown').upper()}",
+        f"**Found:** {report.get('timestamp', 'unknown')}",
+    ]
+
+    metadata: list[tuple[str, Any]] = [
+        ("Target", report.get("target")),
+        ("Endpoint", report.get("endpoint")),
+        ("Method", report.get("method")),
+        ("CVE", report.get("cve")),
+        ("CWE", report.get("cwe")),
+    ]
+    cvss = report.get("cvss")
+    if cvss is not None:
+        metadata.append(("CVSS", cvss))
+    for label, value in metadata:
+        if value:
+            lines.append(f"**{label}:** {value}")
+
+    lines.append("")
+    lines.append("## Description\n")
+    lines.append(report.get("description") or "No description provided.")
+    lines.append("")
+
+    if report.get("impact"):
+        lines.append("## Impact\n")
+        lines.append(str(report["impact"]))
+        lines.append("")
+
+    if report.get("technical_analysis"):
+        lines.append("## Technical Analysis\n")
+        lines.append(str(report["technical_analysis"]))
+        lines.append("")
+
+    if report.get("poc_description") or report.get("poc_script_code"):
+        lines.append("## Proof of Concept\n")
+        if report.get("poc_description"):
+            lines.append(str(report["poc_description"]))
+            lines.append("")
+        if report.get("poc_script_code"):
+            lines.append("```")
+            lines.append(str(report["poc_script_code"]))
+            lines.append("```")
+            lines.append("")
+
+    if report.get("code_locations"):
+        lines.append("## Code Analysis\n")
+        for i, loc in enumerate(report["code_locations"]):
+            file_ref = loc.get("file", "unknown")
+            line_ref = ""
+            if loc.get("start_line") is not None:
+                if loc.get("end_line") and loc["end_line"] != loc["start_line"]:
+                    line_ref = f" (lines {loc['start_line']}-{loc['end_line']})"
+                else:
+                    line_ref = f" (line {loc['start_line']})"
+            lines.append(f"**Location {i + 1}:** `{file_ref}`{line_ref}")
+            if loc.get("label"):
+                lines.append(f"  {loc['label']}")
+            if loc.get("snippet"):
+                lines.append(f"  ```\n  {loc['snippet']}\n  ```")
+            if loc.get("fix_before") or loc.get("fix_after"):
+                lines.append("\n  **Suggested Fix:**")
+                lines.append("```diff")
+                if loc.get("fix_before"):
+                    for ln in str(loc["fix_before"]).splitlines():
+                        lines.append(f"- {ln}")
+                if loc.get("fix_after"):
+                    for ln in str(loc["fix_after"]).splitlines():
+                        lines.append(f"+ {ln}")
+                lines.append("```")
+            lines.append("")
+
+    if report.get("remediation_steps"):
+        lines.append("## Remediation\n")
+        lines.append(str(report["remediation_steps"]))
+        lines.append("")
+
+    return "\n".join(lines)
