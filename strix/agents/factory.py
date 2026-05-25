@@ -20,12 +20,15 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from agents.agent import ToolsToFinalOutputResult
 from agents.sandbox import SandboxAgent
 from agents.sandbox.capabilities import Filesystem, Shell
+from agents.sandbox.errors import InvalidManifestPathError
 from agents.tool import CustomTool, FunctionTool, Tool
+from pydantic import ValidationError
 
 from strix.agents.prompt import render_system_prompt
 from strix.tools.agents_graph.tools import (
@@ -180,10 +183,103 @@ def _configure_chat_completions_filesystem_tools(toolset: Any) -> None:
             setattr(toolset, name, _function_tool_with_error_result(tool))
 
 
-def _configure_chat_completions_shell_tools(toolset: Any) -> None:
+_CHARS_ESCAPE_RE = re.compile(r"\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[0abtnvfr\\])")
+_CHARS_ESCAPE_MAP = {
+    "\\\\": "\\",
+    "\\n": "\n",
+    "\\t": "\t",
+    "\\r": "\r",
+    "\\0": "\x00",
+    "\\a": "\x07",
+    "\\b": "\x08",
+    "\\v": "\x0b",
+    "\\f": "\x0c",
+}
+
+
+def _decode_chars_escape(s: str) -> str:
+    if "\\" not in s:
+        return s
+
+    def sub(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if token in _CHARS_ESCAPE_MAP:
+            return _CHARS_ESCAPE_MAP[token]
+        if token.startswith(("\\u", "\\x")):
+            return chr(int(token[2:], 16))
+        return token
+
+    return _CHARS_ESCAPE_RE.sub(sub, s)
+
+
+def _format_validation_error(tool_name: str, exc: ValidationError) -> str:
+    parts: list[str] = []
+    for err in exc.errors():
+        loc = ".".join(str(x) for x in err.get("loc", ()))
+        msg = err.get("msg", "invalid")
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    return f"{tool_name}: invalid arguments — " + "; ".join(parts)
+
+
+def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
+    invoke_tool = tool.on_invoke_tool
+
+    async def invoke(ctx: Any, raw_input: str) -> Any:
+        try:
+            return await invoke_tool(ctx, raw_input)
+        except ValidationError as exc:
+            return _format_validation_error(tool.name, exc)
+        except InvalidManifestPathError as exc:
+            rel = exc.context.get("rel", "?")
+            return (
+                "exec_command: workdir must be a path inside /workspace "
+                "(or omitted to use the turn's cwd). "
+                f"Got: {rel!r}."
+            )
+
+    tool.on_invoke_tool = invoke
+    return tool
+
+
+def _wrap_write_stdin(tool: FunctionTool) -> FunctionTool:
+    invoke_tool = tool.on_invoke_tool
+
+    async def invoke(ctx: Any, raw_input: str) -> Any:
+        try:
+            parsed = json.loads(raw_input)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("chars"), str):
+            parsed["chars"] = _decode_chars_escape(parsed["chars"])
+            raw_input = json.dumps(parsed)
+        try:
+            return await invoke_tool(ctx, raw_input)
+        except ValidationError as exc:
+            return _format_validation_error(tool.name, exc)
+
+    tool.on_invoke_tool = invoke
+    return tool
+
+
+def _configure_shell_tools(toolset: Any, *, chat_completions: bool) -> None:
     for name, tool in vars(toolset).items():
-        if isinstance(tool, FunctionTool):
-            setattr(toolset, name, _function_tool_with_error_result(tool))
+        if not isinstance(tool, FunctionTool):
+            continue
+        wrapped = tool
+        if tool.name == "exec_command":
+            wrapped = _wrap_exec_command(wrapped)
+        elif tool.name == "write_stdin":
+            wrapped = _wrap_write_stdin(wrapped)
+        if chat_completions:
+            wrapped = _function_tool_with_error_result(wrapped)
+        setattr(toolset, name, wrapped)
+
+
+def _make_shell_configurator(*, chat_completions: bool) -> Any:
+    def configure(toolset: Any) -> None:
+        _configure_shell_tools(toolset, chat_completions=chat_completions)
+
+    return configure
 
 
 def _lifecycle_tool_completed(tool_name: str, output: Any) -> bool:
@@ -366,8 +462,8 @@ def build_strix_agent(
                 ),
             ),
             Shell(
-                configure_tools=(
-                    _configure_chat_completions_shell_tools if chat_completions_tools else None
+                configure_tools=_make_shell_configurator(
+                    chat_completions=chat_completions_tools,
                 ),
             ),
         ],

@@ -11,6 +11,14 @@ Prefer writing reusable scripts to `/workspace/scratch/<name>.py` and
 running them with `python3 /workspace/scratch/<name>.py`. For short
 one-off transformations, `python3 -c` or a small here-document is fine.
 
+The `shell` parameter on `exec_command` is for swapping POSIX shells
+(`bash`/`zsh`/`sh`), not for picking interpreters. Put the interpreter
+invocation in `cmd` instead: `cmd="python3 -c '...'"`, not
+`shell=python3, cmd="..."`. The `shell=<interpreter>` shortcut breaks
+in subtle ways — `python3` works only with `login=False` (because the
+SDK adds `-l`/`-i`), and other interpreters (`node`, `ruby`, `perl`)
+take `-e` not `-c` so they fail even with `login=False`.
+
 ## Proxy Automation From Python
 
 The sandbox image includes an installed `caido_api` module. Import it
