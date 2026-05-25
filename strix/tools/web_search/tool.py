@@ -41,14 +41,19 @@ Structure your response to be comprehensive yet concise, emphasizing the most cr
 security implications and details."""
 
 
-def _do_search(query: str) -> dict[str, Any]:
+def _do_search(query: str) -> dict[str, Any]:  # noqa: PLR0911 - each error class needs its own sanitized return
+    if not query or not query.strip():
+        return {"success": False, "message": "Query cannot be empty."}
+
     api_key = load_settings().integrations.perplexity_api_key
     if not api_key:
         logger.warning("web_search invoked without PERPLEXITY_API_KEY configured")
         return {
             "success": False,
-            "message": "PERPLEXITY_API_KEY environment variable not set",
-            "results": [],
+            "message": (
+                "Web search is not configured for this scan "
+                "(operator needs to set PERPLEXITY_API_KEY). Proceed without it."
+            ),
         }
     logger.info("web_search query (len=%d): %s", len(query), query[:120])
 
@@ -62,32 +67,57 @@ def _do_search(query: str) -> dict[str, Any]:
         ],
     }
 
+    # Internal details (upstream URL, HTTP status, library exception text) stay
+    # in the logs; the model only ever sees a short actionable category so it
+    # can decide whether to retry, refine, or work around the gap.
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=300)
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
     except requests.exceptions.Timeout:
         logger.warning("web_search timed out")
-        return {"success": False, "message": "Request timed out", "results": []}
-    except requests.exceptions.RequestException as e:
-        logger.exception("web_search API request failed")
-        return {"success": False, "message": f"API request failed: {e!s}", "results": []}
-    except KeyError as e:
+        return {
+            "success": False,
+            "message": "Web search timed out. Try again or shorten the query.",
+        }
+    except requests.exceptions.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        logger.exception("web_search HTTP error status=%s", status)
+        if status is not None and 400 <= status < 500:
+            return {
+                "success": False,
+                "message": (
+                    "Web search rejected the query. Refine it "
+                    "(more specific, shorter, no unusual characters) and retry."
+                ),
+            }
+        return {
+            "success": False,
+            "message": "Web search service is unavailable. Try again later.",
+        }
+    except requests.exceptions.RequestException:
+        logger.exception("web_search network error")
+        return {
+            "success": False,
+            "message": "Web search network error. Try again later.",
+        }
+    except (KeyError, IndexError, ValueError):
         logger.exception("web_search response shape unexpected")
         return {
             "success": False,
-            "message": f"Unexpected API response format: missing {e!s}",
-            "results": [],
+            "message": "Web search returned an unexpected response. Try again.",
         }
-    except Exception as e:
+    except Exception:
         logger.exception("web_search failed")
-        return {"success": False, "message": f"Web search failed: {e!s}", "results": []}
+        return {
+            "success": False,
+            "message": "Web search failed unexpectedly.",
+        }
     else:
         return {
             "success": True,
             "query": query,
             "content": content,
-            "message": "Web search completed successfully",
         }
 
 
