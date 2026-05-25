@@ -66,8 +66,12 @@ asyncio.run(main())
 | `list_requests()`      | Query captured traffic with HTTPQL filters |
 | `view_request()`       | Get full request/response details          |
 | `repeat_request()`     | Replay a request with modifications        |
-| `send_request()`       | Send a new HTTP request                    |
 | `scope_rules()`        | Manage proxy scope (allowlist/denylist)    |
+
+For one-off arbitrary requests, use shell tooling like `curl` — the
+sandbox's `HTTP_PROXY` env routes the traffic through Caido
+automatically, so it lands in `list_requests` and can be replayed via
+`repeat_request`.
 
 ### Example: Automated IDOR Testing
 

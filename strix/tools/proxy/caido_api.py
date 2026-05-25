@@ -13,8 +13,6 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from caido_sdk_client import Client, TokenAuthOptions
 from caido_sdk_client.types import (
     ConnectionInfoInput,
-    CreateReplaySessionFromRaw,
-    CreateReplaySessionOptions,
     CreateScopeOptions,
     ReplaySendOptions,
     RequestGetOptions,
@@ -130,10 +128,13 @@ async def get_request_with_client(
     *,
     part: RequestPart = "request",
 ) -> Any:
-    opts = RequestGetOptions(
-        request_raw=(part == "request"),
-        response_raw=(part == "response"),
-    )
+    # The Caido SDK's generated pydantic model marks Request.raw and
+    # Response.raw as required strings even though the GraphQL fragment
+    # makes them conditional via `@include(if: $includeRequestRaw)`.
+    # Passing False for either causes pydantic validation to fail with
+    # "Field required" on the missing raw field. Always request both —
+    # the caller picks which one to surface via ``part``.
+    opts = RequestGetOptions(request_raw=True, response_raw=True)
     return await client.request.get(request_id, opts)
 
 
@@ -236,6 +237,15 @@ def apply_modifications(
     }
 
 
+# Hard wall-clock bound on a single replay dispatch. Caido's Replay
+# API has no built-in send-side timeout, so a stalled connection
+# (unroutable target, slow loopback, etc.) hangs the caller until the
+# function_tool wrapper's 120s budget expires — by which point we've
+# lost any useful error context. 30s is generous for legitimate HTTP
+# and short enough that the model can decide to retry rather than wait.
+_REPLAY_SEND_TIMEOUT_SECONDS = 30.0
+
+
 async def replay_send_raw(
     client: CaidoClient,
     *,
@@ -243,17 +253,42 @@ async def replay_send_raw(
     connection: ConnectionInfoInput,
 ) -> dict[str, Any]:
     started = time.time()
-    session = await client.replay.sessions.create(
-        CreateReplaySessionOptions(
-            request_source=CreateReplaySessionFromRaw(raw=raw, connection=connection),
-        ),
-    )
-    result = await client.replay.send(
-        session.id,
-        ReplaySendOptions(raw=raw, connection=connection),
-    )
+    # Create an empty replay session, then dispatch via ``send()``.
+    # Passing ``CreateReplaySessionFromRaw`` here would also seed a stored
+    # entry on the server side, leading the caller to observe two history
+    # rows per call (one without response from the create-step seed, one
+    # with response from the actual send). The empty-create + send flow
+    # produces exactly one dispatched request.
+    session = await client.replay.sessions.create()
+    try:
+        result = await asyncio.wait_for(
+            client.replay.send(
+                session.id,
+                ReplaySendOptions(raw=raw, connection=connection),
+            ),
+            timeout=_REPLAY_SEND_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        elapsed_ms = int((time.time() - started) * 1000)
+        return {
+            "session_id": str(session.id),
+            "status": "ERROR",
+            "error": (
+                f"Caido replay dispatch did not complete within "
+                f"{_REPLAY_SEND_TIMEOUT_SECONDS:.0f}s. The target may be "
+                "unroutable from the sandbox, or Caido's outbound HTTP client "
+                "is stalled. Check the target host/port and retry."
+            ),
+            "elapsed_ms": elapsed_ms,
+            "response_raw": None,
+        }
     elapsed_ms = int((time.time() - started) * 1000)
-    response_raw = result.entry.response_raw if hasattr(result.entry, "response_raw") else None
+    # ``result.entry.response`` is the parsed Response (with ``.raw`` bytes
+    # when ``includeResponseRaw`` was True, which is the entries SDK's
+    # default). The previous ``result.entry.response_raw`` lookup matched
+    # no attribute on ReplayEntry and silently returned ``None``.
+    response = getattr(result.entry, "response", None)
+    response_raw = getattr(response, "raw", None) if response is not None else None
     return {
         "session_id": str(session.id),
         "status": result.status,
@@ -333,23 +368,6 @@ async def list_requests(
 async def view_request(request_id: str, *, part: RequestPart = "request") -> Any:
     """Return one captured request/response from sandbox Python."""
     return await get_request_with_client(await get_client(), request_id, part=part)
-
-
-async def send_request(
-    method: str,
-    url: str,
-    *,
-    headers: dict[str, str] | None = None,
-    body: str = "",
-) -> dict[str, Any]:
-    """Send an arbitrary raw HTTP request through Caido Replay."""
-    connection, raw = build_raw_request(
-        method=method,
-        url=url,
-        headers=headers or {},
-        body=body,
-    )
-    return await replay_send_raw(await get_client(), raw=raw, connection=connection)
 
 
 async def repeat_request(
@@ -432,6 +450,5 @@ __all__ = [
     "list_requests",
     "repeat_request",
     "scope_rules",
-    "send_request",
     "view_request",
 ]

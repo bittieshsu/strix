@@ -1,12 +1,15 @@
 """Caido proxy tools — host-side ``@function_tool`` wrappers.
 
-The five tools delegate to :mod:`strix.tools.proxy.caido_api` for the actual
+The four tools delegate to :mod:`strix.tools.proxy.caido_api` for the actual
 caido-sdk-client work and add LLM-friendly JSON serialization + error
 wrapping on top. The delegated ``caido_api.py`` module is also copied into
 the sandbox image as the importable ``caido_api`` Python module.
 
-Tools: ``list_requests``, ``view_request``, ``send_request``,
-``repeat_request``, ``scope_rules``.
+Tools: ``list_requests``, ``view_request``, ``repeat_request``,
+``scope_rules``. Arbitrary one-off requests should be made through
+``exec_command`` (e.g. ``curl``) — they're captured automatically via
+the sandbox's ``HTTP_PROXY`` env, so wrapping them in a Strix tool only
+adds an extra layer of indirection.
 """
 
 from __future__ import annotations
@@ -160,6 +163,21 @@ async def list_requests(
         for edge in connection.edges:
             req = edge.node.request
             resp = edge.node.response
+            response_payload: dict[str, Any] | None = None
+            if resp is not None:
+                response_payload = {
+                    "id": resp.id,
+                    "status_code": resp.status_code,
+                    "length": resp.length,
+                    "created_at": resp.created_at.isoformat(),
+                }
+                # Caido populates ``roundtripTime`` for some traffic sources
+                # and leaves it as ``0`` for others (notably proxy captures
+                # of upstream env-routed traffic). Surface the value only
+                # when it's actually measured so the model doesn't waste
+                # tokens reading a zero field on every entry.
+                if resp.roundtrip_time:
+                    response_payload["roundtrip_ms"] = resp.roundtrip_time
             entries.append(
                 {
                     "cursor": edge.cursor,
@@ -173,17 +191,7 @@ async def list_requests(
                         "is_tls": req.is_tls,
                         "created_at": req.created_at.isoformat(),
                     },
-                    "response": (
-                        {
-                            "id": resp.id,
-                            "status_code": resp.status_code,
-                            "length": resp.length,
-                            "roundtrip_ms": resp.roundtrip_time,
-                            "created_at": resp.created_at.isoformat(),
-                        }
-                        if resp is not None
-                        else None
-                    ),
+                    "response": response_payload,
                 },
             )
 
@@ -324,47 +332,6 @@ def _format_text_page(content: str, *, page: int, page_size: int) -> dict[str, A
         "total_lines": len(lines),
         "has_more": end < len(lines),
     }
-
-
-# ----------------------------------------------------------------------
-# send_request
-# ----------------------------------------------------------------------
-@function_tool(timeout=120, strict_mode=False)
-async def send_request(
-    ctx: RunContextWrapper,
-    method: str,
-    url: str,
-    headers: dict[str, str] | None = None,
-    body: str = "",
-    timeout: int = 30,
-) -> str:
-    """Send an arbitrary HTTP request through the Caido proxy.
-
-    Use this for one-off probes (test endpoints, reach external APIs).
-    For modifying-and-replaying a request you've already captured, use
-    ``repeat_request`` instead — it inherits the original headers /
-    cookies / auth and only patches the fields you specify.
-
-    Args:
-        method: ``"GET"`` / ``"POST"`` / ``"PUT"`` / ``"DELETE"`` / etc.
-        url: Full URL with protocol.
-        headers: Optional header dict.
-        body: Optional request body string.
-        timeout: Per-request timeout in seconds (default 30).
-    """
-    del timeout  # The SDK applies its own timeout via the GraphQL settings.
-    client = _ctx_client(ctx)
-    if client is None:
-        return _no_client()
-
-    try:
-        connection, raw = caido_api.build_raw_request(
-            method=method, url=url, headers=headers or {}, body=body
-        )
-        result = await caido_api.replay_send_raw(client, raw=raw, connection=connection)
-        return _format_replay_tool_result(result)
-    except Exception as exc:  # noqa: BLE001
-        return _err("send_request", exc)
 
 
 # ----------------------------------------------------------------------

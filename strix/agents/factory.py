@@ -48,7 +48,6 @@ from strix.tools.proxy.tools import (
     list_requests,
     repeat_request,
     scope_rules,
-    send_request,
     view_request,
 )
 from strix.tools.reporting.tool import create_vulnerability_report
@@ -268,7 +267,6 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     # Caido HTTP/HTTPS proxy
     list_requests,
     view_request,
-    send_request,
     repeat_request,
     scope_rules,
     # Multi-agent graph tools (the coordinator is in ctx.context)

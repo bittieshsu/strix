@@ -21,7 +21,6 @@ from caido_api import (
     list_requests,
     repeat_request,
     scope_rules,
-    send_request,
     view_request,
 )
 ```
@@ -59,9 +58,14 @@ Available helpers:
 
 - `list_requests(httpql_filter=, first=50, after=, sort_by=, sort_order=, scope_id=)` returns a cursor-paginated Caido SDK `Connection`.
 - `view_request(request_id, part="request")` returns a Caido SDK request object with raw request/response bytes.
-- `send_request(method, url, headers=None, body="")` sends an arbitrary raw request through Caido Replay.
 - `repeat_request(request_id, modifications={...})` replays a captured request after modifying `url`, `params`, `headers`, `body`, or `cookies`.
 - `scope_rules(action, allowlist=, denylist=, scope_id=, scope_name=)` manages Caido scopes.
+
+For one-off arbitrary requests (e.g. probing a fresh endpoint, hitting an
+external API), use `exec_command` with `curl` / `httpx` / `requests`. The
+sandbox's `HTTP_PROXY` env routes all such traffic through Caido
+automatically, so it shows up in `list_requests` and you can use
+`repeat_request` to replay-and-modify any of it.
 
 ## Workflow
 
