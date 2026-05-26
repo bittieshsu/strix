@@ -19,10 +19,7 @@ def open_agent_session(agent_id: str, path: Path) -> SQLiteSession:
     return SQLiteSession(session_id=agent_id, db_path=path)
 
 
-_IMAGE_REJECTED_TEXT = (
-    "[image rejected by the model — view_image is unsupported on this scan; "
-    "do not call it again, continue without visual inspection]"
-)
+_IMAGE_REJECTED_TEXT = "[image rejected by the model]"
 
 
 async def strip_latest_image_from_session(session: Session) -> bool:
