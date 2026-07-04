@@ -37,14 +37,18 @@ GCP misconfigurations expose project data, service account keys, and lateral mov
 - OAuth tokens in browser/local `gcloud` config (`~/.config/gcloud/`)
 
 **Unauthenticated Enumeration**
+
+Avoid `gsutil` for anonymous checks — it can use ambient `gcloud` or application-default credentials and produce false public-bucket findings. Unset `GOOGLE_APPLICATION_CREDENTIALS` and use unauthenticated HTTP instead.
+
 ```
-# GCS bucket existence and listing (allUsers / allAuthenticatedUsers)
-gsutil ls gs://target-bucket
+# GCS bucket existence (403 = exists but private, 404 = not found/wrong region)
 curl -I https://storage.googleapis.com/target-bucket/
+
+# Anonymous listing (no Authorization header; confirms allUsers/allAuthenticatedUsers List)
 curl https://storage.googleapis.com/target-bucket/
 
-# Firebase/GCP storage alternate URLs
-https://target-bucket.storage.googleapis.com/
+# Alternate URL forms
+curl -I https://target-bucket.storage.googleapis.com/
 ```
 
 **Authenticated Enumeration**
@@ -69,8 +73,8 @@ gcloud container clusters list
 
 **Test:**
 ```
-gsutil iam get gs://BUCKET
-gsutil ls gs://BUCKET
+gsutil iam get gs://BUCKET          # requires credentials
+curl https://storage.googleapis.com/BUCKET/   # anonymous listing check
 curl -I https://storage.googleapis.com/BUCKET/sensitive.sql
 ```
 

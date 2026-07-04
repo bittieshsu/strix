@@ -40,7 +40,12 @@ client_id, audience, scope values in authorize URLs
 ```
 GET https://TENANT.auth0.com/.well-known/openid-configuration
 GET https://TENANT.auth0.com/.well-known/jwks.json
+```
+
+**Authenticated Userinfo** (requires bearer access token — unauthenticated requests return 401)
+```
 GET https://TENANT.auth0.com/userinfo
+Authorization: Bearer <access_token>
 ```
 
 **Application Fingerprint**
