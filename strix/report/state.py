@@ -438,30 +438,37 @@ class ReportState:
         targets = self.run_record.get("targets_info") or []
         if not isinstance(targets, list):
             return None
-        for target in targets:
-            if not isinstance(target, dict) or target.get("type") != "repository":
-                continue
-            details = target.get("details") or {}
-            if not isinstance(details, dict):
-                continue
-            uri = details.get("target_repo")
-            if not isinstance(uri, str) or not uri.strip():
-                continue
+        repo_targets = [
+            target
+            for target in targets
+            if isinstance(target, dict) and target.get("type") == "repository"
+        ]
+        # Provenance binds the whole run to one repo; with multiple repo targets
+        # that's ambiguous, so omit it rather than mis-attributing later repos'
+        # findings to the first repo's URI/commit.
+        if len(repo_targets) != 1:
+            return None
+        target = repo_targets[0]
+        details = target.get("details") or {}
+        if not isinstance(details, dict):
+            return None
+        uri = details.get("target_repo")
+        if not isinstance(uri, str) or not uri.strip():
+            return None
 
-            context: dict[str, Any] = {"repositoryUri": uri.strip()}
-            full_name = _parse_repo_full_name(uri)
-            if full_name:
-                context["repositoryFullName"] = full_name
-            cloned = details.get("cloned_repo_path")
-            if isinstance(cloned, str) and cloned.strip():
-                commit, branch = _git_head(cloned.strip())
-                if commit:
-                    context["commitSha"] = commit
-                if branch:
-                    context["branch"] = branch
-                    context["ref"] = f"refs/heads/{branch}"
-            return context
-        return None
+        context: dict[str, Any] = {"repositoryUri": uri.strip()}
+        full_name = _parse_repo_full_name(uri)
+        if full_name:
+            context["repositoryFullName"] = full_name
+        cloned = details.get("cloned_repo_path")
+        if isinstance(cloned, str) and cloned.strip():
+            commit, branch = _git_head(cloned.strip())
+            if commit:
+                context["commitSha"] = commit
+            if branch:
+                context["branch"] = branch
+                context["ref"] = f"refs/heads/{branch}"
+        return context
 
     def _sync_llm_usage_record(self) -> None:
         self.run_record["llm_usage"] = self._build_llm_usage_record()
