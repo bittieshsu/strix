@@ -41,7 +41,7 @@ from strix.tools.proxy.tools import (
     view_request,
     view_sitemap_entry,
 )
-from strix.tools.reporting.tool import create_vulnerability_report
+from strix.tools.reporting.tool import create_dependency_report, create_vulnerability_report
 from strix.tools.thinking.tool import think
 from strix.tools.todo.tools import (
     create_todo,
@@ -335,6 +335,7 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     delete_note,
     web_search,
     create_vulnerability_report,
+    create_dependency_report,
     list_requests,
     view_request,
     repeat_request,
